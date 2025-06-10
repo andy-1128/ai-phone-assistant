@@ -4,7 +4,19 @@ from openai import OpenAI
 from outlook_email import send_email
 import os
 from dotenv import load_dotenv
+from flask import Flask, request
+from twilio.twiml.voice_response import VoiceResponse
 
+app = Flask(__name__)
+
+@app.route("/voice", methods=["POST"])
+def voice():
+    resp = VoiceResponse()
+    resp.say("Hello! This is the AI assistant. How can I help you?")
+    return str(resp)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
 load_dotenv()
 app = Flask(__name__)
 openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
