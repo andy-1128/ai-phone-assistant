@@ -65,4 +65,6 @@ def end_call():
         send_email(subject="Tenant Issue: " + email_body.split('.')[0], body=email_body)
         del conversations[from_number]
 
+    if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
     return ('', 204)
