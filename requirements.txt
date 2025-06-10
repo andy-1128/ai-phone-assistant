@@ -1,0 +1,7 @@
+
+flask
+twilio
+openai
+msal
+requests
+python-dotenv
