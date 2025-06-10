@@ -1,4 +1,7 @@
-
+@app.route("/", methods=["GET"])
+def index():
+    return "✅ AI Phone Assistant is running"
+    
 from flask import Flask, request
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from openai import OpenAI
