@@ -4,13 +4,12 @@ from openai import OpenAI
 from outlook_email import send_email
 import os
 from dotenv import load_dotenv
-
-@app.route("/", methods=["GET"])
-def index():
-    return "✅ AI Phone Assistant is running"
     
 load_dotenv()
 app = Flask(__name__)
+@app.route("/", methods=["GET"])
+def index():
+    return "✅ AI Phone Assistant is running"
 openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 conversations = {}
