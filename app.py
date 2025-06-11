@@ -13,16 +13,14 @@ load_dotenv()
 
 app = Flask(__name__)
 
-@app.route("/", methods=["GET"])
-def index():
-    return "✅ AI Phone Assistant is running"
-
 @app.route("/voice", methods=["POST"])
 def voice():
     resp = VoiceResponse()
     resp.say("Hello! This is the AI assistant. How can I help you?")
     return str(resp)
-
+@app.route("/", methods=["GET"])
+def index():
+    return "✅ AI Phone Assistant is running"
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
