@@ -9,7 +9,14 @@ from dotenv import load_dotenv
 from flask import Flask, request
 from twilio.twiml.voice_response import VoiceResponse
 
+# Load environment variables
+load_dotenv()
+
 app = Flask(__name__)
+
+@app.route("/", methods=["GET"])
+def index():
+    return "✅ AI Phone Assistant is running"
 
 @app.route("/voice", methods=["POST"])
 def voice():
