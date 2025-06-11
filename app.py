@@ -4,35 +4,18 @@ from openai import OpenAI
 from outlook_email import send_email
 import os
 from dotenv import load_dotenv
-from flask import Flask, request
-from twilio.twiml.voice_response import VoiceResponse
-import os
-from dotenv import load_dotenv
 
+# Load environment variables
 load_dotenv()
 
-app = Flask(__name__)
-
-@app.route("/voice", methods=["POST"])
-def voice():
-    resp = VoiceResponse()
-    resp.say("Hello! This is the AI assistant. How can I help you?")
-    return str(resp)
-@app.route("/", methods=["GET"])
-def index():
-    return "✅ AI Phone Assistant is running"
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-load_dotenv()
 app = Flask(__name__)
 openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+conversations = {}
+
 @app.route("/", methods=["GET"])
 def index():
     return "✅ AI Phone Assistant is running"
-
-conversations = {}
 
 @app.route("/voice", methods=["POST"])
 def voice():
@@ -58,9 +41,7 @@ def gather():
 
     ai_reply = openai.chat.completions.create(
         model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "You are a helpful real estate property manager AI. Keep conversations short and clear."}
-        ] + conversations[from_number]
+        messages=[{"role": "system", "content": "You are a helpful real estate property manager AI. Keep conversations short and clear."}] + conversations[from_number]
     )
 
     reply = ai_reply.choices[0].message.content
@@ -88,6 +69,7 @@ def end_call():
         del conversations[from_number]
     
     return ('', 204)
-    
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
