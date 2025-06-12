@@ -1,68 +1,49 @@
-
 import os
 from flask import Flask, request, Response
-from twilio.twiml.voice_response import VoiceResponse, Gather
+from twilio.twiml.voice_response import VoiceResponse
 from openai import OpenAI
 from outlook_email import send_email
 
 app = Flask(__name__)
-openai_api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=openai_api_key)
-
-conversation_history = []
-
-def detect_language(text):
-    if any(word in text.lower() for word in ["hola", "baño", "problema", "gracias"]):
-        return "spanish"
-    return "english"
-
-def get_voice(language):
-    return "es-US-JennyMultilingualNeural" if language == "spanish" else "en-US-KalebNeural"
-
-def generate_ai_response(prompt, language="english"):
-    response = client.chat.completions.create(
-        model="gpt-4",
-        messages=[{"role": "system", "content": "You are a helpful AI receptionist for a property management company named GRHUSA Properties."},
-                  {"role": "user", "content": prompt}]
-    )
-    reply = response.choices[0].message.content.strip()
-    conversation_history.append(f"User: {prompt}\nAI: {reply}")
-    return reply
+conversations = {}
 
 @app.route("/voice", methods=["POST"])
 def voice():
+    call_sid = request.form["CallSid"]
     response = VoiceResponse()
-    response.say("Hi, this is the AI assistant for GRHUSA Properties. Please talk to me like a human and let me know how I can help.", voice="en-US-KalebNeural", language="en-US")
-    gather = Gather(input="speech", action="/gather", speechTimeout="auto", language="en-US")
-    gather.say("I'm listening.", voice="en-US-KalebNeural")
-    response.append(gather)
+    response.say("Hola, gracias por llamar a Grhusa Properties. ¿Cómo puedo ayudarte hoy?", voice="Polly.Joanna", language="es-ES")
+    response.gather(input="speech", action="/gather", method="POST")
     return Response(str(response), mimetype="application/xml")
 
 @app.route("/gather", methods=["POST"])
 def gather():
+    call_sid = request.form["CallSid"]
     speech_result = request.form.get("SpeechResult", "")
-    language = detect_language(speech_result)
-    voice = get_voice(language)
-    ai_response = generate_ai_response(speech_result, language)
+    conversations.setdefault(call_sid, []).append(speech_result)
+    response = VoiceResponse()
+
+    # Simple language detection
+    if any(word in speech_result.lower() for word in ["hola", "baño", "gracias", "tengo", "problema"]):
+        voice = "Polly.Jennifer"
+        response.say("Lo siento escuchar eso. ¿Puedes darme más detalles por favor?", voice=voice, language="es-ES")
+    else:
+        voice = "Polly.Kimberly"
+        response.say("I'm sorry to hear that. Could you please tell me more?", voice=voice)
+
+    response.gather(input="speech", action="/gather", method="POST")
+    return Response(str(response), mimetype="application/xml")
+
+@app.route("/end", methods=["POST"])
+def end():
+    call_sid = request.form["CallSid"]
+    summary = "Summarize this conversation briefly and highlight important issues: " + str(conversations.get(call_sid, []))
 
     response = VoiceResponse()
-    if speech_result:
-        gather = Gather(input="speech", action="/gather", speechTimeout="auto", language="es-US" if language == "spanish" else "en-US")
-        gather.say(ai_response, voice=voice)
-        response.append(gather)
-    else:
-        response.say("I'm sorry, I didn't catch that.", voice=voice)
+    response.say("Thank you for calling. We will follow up shortly.", voice="Polly.Kimberly")
+    response.hangup()
 
-    if "bye" in speech_result.lower() or "adiós" in speech_result.lower():
-        summary_prompt = "Summarize this conversation briefly and highlight important issues."
-        summary = generate_ai_response(summary_prompt)
-        send_email("Tenant Call Summary", summary)
-        response.say("Thank you for calling. We will follow up shortly.", voice=voice)
-        response.hangup()
-        summary_prompt = "Summarize this conversation briefly and highlight important issues: " + str(conversations[call_sid])
-
+    send_email("Tenant Call Summary", summary)
     return Response(str(response), mimetype="application/xml")
-return Response(str(response), mimetype="application/xml")
 
 if __name__ == "__main__":
     from waitress import serve
