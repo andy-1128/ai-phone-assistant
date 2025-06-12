@@ -18,7 +18,6 @@ def send_email(subject, body):
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
-
     email_data = {
         "message": {
             "subject": subject,
@@ -27,17 +26,11 @@ def send_email(subject, body):
                 "content": body
             },
             "toRecipients": [
-                {"emailAddress": {"address": "andrew@grhusaproperties.net"}},
-                {"emailAddress": {"address": "email2@example.com"}},
-                {"emailAddress": {"address": "email3@example.com"}},
-                {"emailAddress": {"address": "email4@example.com"}}
+                {"emailAddress": {"address": "manager1@outlook.com"}},
+                {"emailAddress": {"address": "manager2@outlook.com"}},
+                {"emailAddress": {"address": "manager3@outlook.com"}},
+                {"emailAddress": {"address": "manager4@outlook.com"}}
             ]
-        },
-        "saveToSentItems": "true"
+        }
     }
-
-    requests.post(
-        "https://graph.microsoft.com/v1.0/me/sendMail",
-        headers=headers,
-        json=email_data
-    )
+    requests.post("https://graph.microsoft.com/v1.0/users/me/sendMail", headers=headers, json=email_data)
