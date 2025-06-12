@@ -11,7 +11,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 
 conversations = {}
 
-def detect_language(text):A
+def detect_language(text):
     try:
         return detect(text)
     except:
