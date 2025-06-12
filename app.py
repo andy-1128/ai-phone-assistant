@@ -9,12 +9,11 @@ load_dotenv()
 
 app = Flask(__name__)
 openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
 conversations = {}
 
 @app.route("/", methods=["GET"])
 def index():
-    return "✅ AI Phone Assistant for GRHUSA Properties is active"
+    return "✅ AI Phone Assistant for Grhusa Properties is running"
 
 @app.route("/voice", methods=["POST"])
 def voice():
@@ -23,21 +22,15 @@ def voice():
 
     resp = VoiceResponse()
     gather = Gather(input='speech', action='/gather', method='POST', speechTimeout='auto')
-    gather.say("Hi, this is the AI assistant for GRHUSA Properties. Please talk to me like a human and let me know how I can help.")
+    gather.say("Hi, this is the AI assistant for G-R-H-U-S-A Properties. Please talk to me like a human and let me know how I can help.")
     resp.append(gather)
     resp.redirect('/voice')
     return str(resp)
 
 @app.route("/gather", methods=["POST"])
 def gather():
-    speech_text = request.form.get('SpeechResult')
-    from_number = request.form.get('From')
-
-    if not speech_text:
-        resp = VoiceResponse()
-        resp.say("Sorry, I didn't catch that. Please try again.")
-        resp.redirect('/voice')
-        return str(resp)
+    speech_text = request.form.get("SpeechResult")
+    from_number = request.form.get("From")
 
     if from_number not in conversations:
         conversations[from_number] = []
@@ -47,7 +40,7 @@ def gather():
     ai_reply = openai.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": "You are an experienced and friendly property management assistant at GRHUSA. Help tenants with unit issues, rent, maintenance, and schedule follow-ups. Keep responses professional and clear."}
+            {"role": "system", "content": "You are a helpful and intelligent AI phone assistant for a property management company named G-R-H-U-S-A Properties. Your job is to have real, human-like conversations with tenants about their issues such as rent, repairs, noise complaints, lease questions, or emergencies. Always be clear, polite, and keep the conversation going until they confirm they are done."},
         ] + conversations[from_number]
     )
 
@@ -69,19 +62,14 @@ def end_call():
     if history:
         summary = openai.chat.completions.create(
             model="gpt-4o",
-            messages=[{"role": "system", "content": "Summarize the following tenant call for a property management team. Include problems mentioned and tone of call."}] + history
+            messages=[{"role": "system", "content": "Summarize this tenant call clearly in a few sentences for the property team."}] + history
         )
         email_body = summary.choices[0].message.content
-        send_email(
-            subject="New Tenant Issue Logged",
-            body=email_body
-        )
+        subject = "Tenant Issue Summary - Grhusa Call"
+        send_email(subject=subject, body=email_body)
         del conversations[from_number]
 
-    resp = VoiceResponse()
-    resp.say("Thank you. This conversation will be escalated to a GRHUSA team member who will follow up with you shortly. Goodbye.")
-    resp.hangup()
-    return str(resp)
+    return ('', 204)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
