@@ -1,11 +1,10 @@
 from flask import Flask, request
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from openai import OpenAI
+from outlook_email import send_email
 import os
 from dotenv import load_dotenv
-from outlook_email import send_email  # You must define this function
 
-# Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
@@ -15,7 +14,7 @@ conversations = {}
 
 @app.route("/", methods=["GET"])
 def index():
-    return "✅ AI Assistant for Grhusa Properties is running."
+    return "✅ AI Phone Assistant for GRHUSA Properties is active"
 
 @app.route("/voice", methods=["POST"])
 def voice():
@@ -24,7 +23,7 @@ def voice():
 
     resp = VoiceResponse()
     gather = Gather(input='speech', action='/gather', method='POST', speechTimeout='auto')
-    gather.say("Hi, this is the AI assistant for Grhusa Properties. Please talk to me like a human and let me know how I can help.")
+    gather.say("Hi, this is the AI assistant for GRHUSA Properties. Please talk to me like a human and let me know how I can help you.")
     resp.append(gather)
     resp.redirect('/voice')
     return str(resp)
@@ -36,7 +35,7 @@ def gather():
 
     if not speech_text:
         resp = VoiceResponse()
-        resp.say("Sorry, I didn’t catch that. Can you please repeat?")
+        resp.say("Sorry, I didn't catch that. Please try again.")
         resp.redirect('/voice')
         return str(resp)
 
@@ -48,7 +47,7 @@ def gather():
     ai_reply = openai.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": "You are a friendly and helpful property management assistant. Engage like a human and help the tenant professionally."}
+            {"role": "system", "content": "You are an experienced and friendly property management assistant at GRHUSA. Help tenants with unit issues, rent, maintenance, and schedule follow-ups. Keep responses professional and clear."}
         ] + conversations[from_number]
     )
 
@@ -70,23 +69,19 @@ def end_call():
     if history:
         summary = openai.chat.completions.create(
             model="gpt-4o",
-            messages=[{"role": "system", "content": "Summarize this tenant call for an email to property management."}] + history
+            messages=[{"role": "system", "content": "Summarize the following tenant call for a property management team. Include problems mentioned and tone of call."}] + history
         )
         email_body = summary.choices[0].message.content
-
-        # Send to multiple Outlook addresses
-        recipients = [
-            "manager@grhusa.com",
-            "support@grhusa.com",
-            "admin@grhusa.com",
-            "maintenance@grhusa.com"
-        ]
-        for email in recipients:
-            send_email(to=email, subject="📞 Tenant Concern Summary", body=email_body)
-
+        send_email(
+            subject="New Tenant Issue Logged",
+            body=email_body
+        )
         del conversations[from_number]
 
-    return ('', 204)
+    resp = VoiceResponse()
+    resp.say("Thank you. This conversation will be escalated to a GRHUSA team member who will follow up with you shortly. Goodbye.")
+    resp.hangup()
+    return str(resp)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
