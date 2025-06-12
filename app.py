@@ -1,14 +1,14 @@
 from flask import Flask, request
-from twilio.twiml.voice_response import VoiceResponse, Gather
-import openai
+from twilio.twiml.voice_response import VoiceResponse, Gather, Say
+from openai import OpenAI
+from outlook_email import send_email
 import os
 from dotenv import load_dotenv
-from outlook_email import send_email
 
 load_dotenv()
-app = Flask(__name__)
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+app = Flask(__name__)
+openai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 conversations = {}
 
 @app.route("/", methods=["GET"])
@@ -21,16 +21,16 @@ def voice():
     conversations[from_number] = []
 
     resp = VoiceResponse()
-    gather = Gather(input='speech', action='/gather', method='POST', speechTimeout='auto', voice='Polly.Joanna')
-    gather.say("Hello! This is the AI assistant for G-R-H-U-S-A Properties. Please talk to me like a human and let me know how I can help. You can speak in English or Spanish.")
+    gather = Gather(input='speech', action='/gather', method='POST', speechTimeout='auto')
+    gather.say("Hi, this is the AI assistant for G-R-H-U-S-A Properties. Please talk to me like a human and let me know how I can help.", voice="Polly.Joanna", language="en-US")
     resp.append(gather)
     resp.redirect('/voice')
     return str(resp)
 
 @app.route("/gather", methods=["POST"])
 def gather():
-    speech_text = request.form.get('SpeechResult')
-    from_number = request.form.get('From')
+    speech_text = request.form.get("SpeechResult")
+    from_number = request.form.get("From")
 
     if from_number not in conversations:
         conversations[from_number] = []
@@ -38,35 +38,26 @@ def gather():
     conversations[from_number].append({"role": "user", "content": speech_text})
 
     try:
-        ai_reply = openai.ChatCompletion.create(
+        ai_reply = openai.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a professional, helpful, and kind bilingual AI assistant for a property management company called GRHUSA Properties."
-                        "Speak clearly and fast with a friendly tone, like a human assistant."
-                        "Handle tenant complaints, questions about leases, payments, and emergencies."
-                        "Always ask follow-ups and keep the conversation going until the tenant ends the call."
-                        "Example: If a tenant says 'Hi, my toilet is leaking', reply 'I'm sorry to hear that! When did the leak start?' and continue from there."
-                    )
-                }
+                {"role": "system", "content": "You are a helpful, bilingual (English/Spanish) AI assistant for a property management company called G-R-H-U-S-A Properties. Speak like a professional woman with warmth, empathy, and clarity. Respond like a human would — acknowledge issues, ask polite follow-ups, and maintain the conversation. Always ask another question to keep it going."},
             ] + conversations[from_number]
         )
 
-        reply = ai_reply.choices[0].message['content']
+        reply = ai_reply.choices[0].message.content
         conversations[from_number].append({"role": "assistant", "content": reply})
 
         resp = VoiceResponse()
-        gather = Gather(input='speech', action='/gather', method='POST', speechTimeout='auto', voice='Polly.Joanna')
-        gather.say(reply)
+        gather = Gather(input='speech', action='/gather', method='POST', speechTimeout='auto')
+        gather.say(reply, voice="Polly.Joanna", language="en-US")
         resp.append(gather)
         resp.redirect('/voice')
         return str(resp)
 
-    except openai.error.OpenAIError as e:
+    except Exception as e:
         resp = VoiceResponse()
-        resp.say("I'm very sorry. There was a technical issue with the assistant. Please try again later.")
+        resp.say("I’m sorry, something went wrong with the system. Please try again later.", voice="Polly.Joanna", language="en-US")
         return str(resp)
 
 @app.route("/end", methods=["POST"])
@@ -75,17 +66,14 @@ def end_call():
     history = conversations.get(from_number, [])
 
     if history:
-        summary = openai.ChatCompletion.create(
+        summary = openai.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "Summarize this tenant conversation clearly for the property management team. List any problems and tenant needs."}
-            ] + history
+            messages=[{"role": "system", "content": "Summarize this tenant conversation in professional tone for internal staff."}] + history
         )
-        email_body = summary.choices[0].message['content']
-        subject = "📋 Tenant Call Summary - Grhusa AI Assistant"
+        email_body = summary.choices[0].message.content
+        subject = "Tenant Conversation Summary - Grhusa Properties"
 
-        # Send to multiple recipients
-        recipients = os.getenv("EMAIL_TO").split(',')
+        recipients = os.getenv("EMAIL_TO", "").split(",")
         for recipient in recipients:
             send_email(subject=subject, body=email_body, to=recipient.strip())
 
