@@ -58,7 +58,7 @@ def gather():
 
     # If user says "goodbye" or similar
     if any(bye in user_input.lower() for bye in ["bye", "adios", "goodbye", "gracias"]):
-        summary_prompt = "Summarize this conversation briefly and highlight important issues:
+        summary_prompt = "Summarize this conversation briefly and highlight important issues."
 " + str(conversations[call_sid])
         try:
             summary = openai.ChatCompletion.create(
