@@ -1,5 +1,5 @@
 from flask import Flask, request
-from twilio.twiml.voice_response import VoiceResponse, Gather
+from twilio.twiml.voice_response import VoiceResponse, Gather, Say
 from openai import OpenAI
 from outlook_email import send_email
 import os
@@ -21,15 +21,8 @@ def voice():
     conversations[from_number] = []
 
     resp = VoiceResponse()
-    gather = Gather(
-        input='speech', 
-        action='/gather', 
-        method='POST', 
-        speechTimeout='auto', 
-        language='es-ES', 
-        voice='Polly.Conchita'
-    )
-    gather.say("Hola, soy la asistente de inteligencia artificial para Grhusa Properties. Por favor, háblame como si fuera una persona real y dime cómo puedo ayudarte hoy.")
+    gather = Gather(input='speech', action='/gather', method='POST', speechTimeout='auto')
+    gather.say("Hi, this is the AI assistant for G-R-H-U-S-A Properties. Please talk to me like a human and let me know how I can help.", voice="Polly.Kimberly", language="en-US")
     resp.append(gather)
     resp.redirect('/voice')
     return str(resp)
@@ -39,40 +32,46 @@ def gather():
     speech_text = request.form.get("SpeechResult")
     from_number = request.form.get("From")
 
+    if not speech_text:
+        resp = VoiceResponse()
+        resp.say("I'm sorry, I didn't catch that. Could you repeat it?", voice="Polly.Kimberly", language="en-US")
+        resp.redirect('/voice')
+        return str(resp)
+
+    is_spanish = any(word in speech_text.lower() for word in ["baño", "agua", "problema", "grifo", "gotea", "reparar"])
+    lang = 'es-ES' if is_spanish else 'en-US'
+    voice = 'Polly.Conchita' if is_spanish else 'Polly.Kimberly'
+
     if from_number not in conversations:
         conversations[from_number] = []
 
     conversations[from_number].append({"role": "user", "content": speech_text})
 
+    prompt = "You are an AI phone assistant for Grhusa Properties."
+    if is_spanish:
+        prompt += " You are Jennifer Lopez. Speak fluent Spanish clearly. Answer naturally and ask clarifying questions."
+    else:
+        prompt += " You are Kaley Cuoco. Speak fluent English, clearly and fast. Respond helpfully and conversationally."
+
     try:
         ai_reply = openai.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "You are a warm, caring, intelligent AI phone assistant for a property management company named Grhusa Properties. Speak in fluent Spanish and sound like a professional Spanish-speaking human. Handle tenant concerns clearly, especially about issues like leaking toilets, broken AC, rent delays, or noisy neighbors. Always acknowledge their emotion and offer helpful responses. Keep the conversation going until they indicate they are done."},
+                {"role": "system", "content": prompt}
             ] + conversations[from_number]
         )
-
         reply = ai_reply.choices[0].message.content
-        conversations[from_number].append({"role": "assistant", "content": reply})
+    except Exception:
+        reply = "Lo siento, ocurrió un error con la aplicación." if is_spanish else "Sorry, there was an application error."
 
-        resp = VoiceResponse()
-        gather = Gather(
-            input='speech', 
-            action='/gather', 
-            method='POST', 
-            speechTimeout='auto', 
-            language='es-ES', 
-            voice='Polly.Conchita'
-        )
-        gather.say(reply)
-        resp.append(gather)
-        resp.redirect('/voice')
-        return str(resp)
+    conversations[from_number].append({"role": "assistant", "content": reply})
 
-    except Exception as e:
-        resp = VoiceResponse()
-        resp.say("Lo siento, ha ocurrido un error de aplicación. Intentémoslo de nuevo más tarde.")
-        return str(resp)
+    resp = VoiceResponse()
+    gather = Gather(input='speech', action='/gather', method='POST', speechTimeout='auto')
+    gather.say(reply, voice=voice, language=lang)
+    resp.append(gather)
+    resp.redirect('/voice')
+    return str(resp)
 
 @app.route("/end", methods=["POST"])
 def end_call():
@@ -80,15 +79,20 @@ def end_call():
     history = conversations.get(from_number, [])
 
     if history:
-        summary = openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "Summarize this tenant conversation clearly in Spanish. Stress important issues or requests made by the tenant. Format the summary like a report for the Grhusa Properties team."}
-            ] + history
-        )
-        email_body = summary.choices[0].message.content
-        subject = "Resumen de llamada de inquilino - Grhusa Properties"
-        send_email(subject=subject, body=email_body)
+        summary_prompt = "Please summarize this tenant call with important issues highlighted. Keep it professional."
+        try:
+            summary = openai.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": summary_prompt}
+                ] + history
+            )
+            email_body = summary.choices[0].message.content
+            subject = "📞 Tenant Call Summary - GRHUSA Properties"
+            send_email(subject=subject, body=email_body)
+        except Exception:
+            pass
+
         del conversations[from_number]
 
     return ('', 204)
