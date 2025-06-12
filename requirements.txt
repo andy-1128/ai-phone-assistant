@@ -5,3 +5,4 @@ openai
 msal
 requests
 python-dotenv
+waitress
