@@ -1,6 +1,5 @@
 import datetime
 import webbrowser
-import wikipedia
 import sys
 
 # Initialize the text-to-speech engine
