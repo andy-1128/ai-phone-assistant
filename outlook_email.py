@@ -1,4 +1,3 @@
-import speech_recognition as sr
 import datetime
 import webbrowser
 import wikipedia
