@@ -23,7 +23,7 @@ def voice():
 
     resp = VoiceResponse()
     gather = Gather(input='speech', action='/gather', method='POST', speechTimeout='auto')
-    gather.say("Hi, this is the AI assistant for GRHUSA Properties. Please talk to me like a human and let me know how I can help you.")
+    gather.say("Hi, this is the AI assistant for GRHUSA Properties. Please talk to me like a human and let me know how I can help.")
     resp.append(gather)
     resp.redirect('/voice')
     return str(resp)
