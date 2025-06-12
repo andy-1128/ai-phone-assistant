@@ -85,3 +85,7 @@ if __name__ == "__main__":
         user_command = listen_command()
         if user_command:
             process_command(user_command)
+            send_email(
+    subject="Tenant Concern Summary",
+    body=email_body
+)
