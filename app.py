@@ -59,6 +59,7 @@ def gather():
         send_email("Tenant Call Summary", summary)
         response.say("Thank you for calling. We will follow up shortly.", voice=voice)
         response.hangup()
+        summary_prompt = "Summarize this conversation briefly and highlight important issues: " + str(conversations[call_sid])
 
     return Response(str(response), mimetype="application/xml")
 
