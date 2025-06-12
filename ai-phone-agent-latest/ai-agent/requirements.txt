@@ -1,7 +1,6 @@
-
-flask
+Flask
 twilio
 openai
-msal
-requests
 python-dotenv
+requests
+msal
