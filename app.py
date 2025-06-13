@@ -81,7 +81,7 @@ def handle_voice():
             "Hola, soy la asistente virtual de GRHUSA Properties. Puedes hablar conmigo como con una persona real. ¿Cómo puedo ayudarte?"
 
         resp.say(greeting, voice=voice_id, language=lang_code)
-        resp.listen(timeout=6, speech_timeout="auto")
+       resp.gather(input="speech", timeout=6, speech_timeout="auto", action="/voice", method="POST")
     else:
         # Second stage: generate response and hang up
         reply = prompt_response(speech, lang)
