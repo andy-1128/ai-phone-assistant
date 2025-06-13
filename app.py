@@ -1,7 +1,6 @@
 import os
 from flask import Flask, request, Response
 from twilio.twiml.voice_response import VoiceResponse
-from twilio.rest import Client
 from langdetect import detect
 import openai
 import smtplib
@@ -9,21 +8,18 @@ from email.mime.text import MIMEText
 
 app = Flask(__name__)
 
-# Twilio & OpenAI keys
+# Load secrets
 openai.api_key = os.getenv("OPENAI_API_KEY")
 twilio_sid = os.getenv("TWILIO_SID")
 twilio_token = os.getenv("TWILIO_AUTH_TOKEN")
-twilio_client = Client(twilio_sid, twilio_token)
 
-# Email Config
-EMAIL_SENDER = "no-reply@grhusaproperties.net"
+# Email for summary
+EMAIL_SENDER = "notifications@grhusaproperties.net"
 EMAIL_RECEIVER = "andrew@grhusaproperties.net"
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_USER = os.getenv("EMAIL_USER")
 SMTP_PASS = os.getenv("EMAIL_PASS")
-
-conversations = {}
 
 def detect_language(text):
     try:
@@ -31,34 +27,42 @@ def detect_language(text):
     except:
         return "en"
 
-def generate_response(prompt, lang="en"):
-    pre_prompt = (
-        "You're a fast, helpful, fluent female AI receptionist for a real estate company. "
-        "Speak warmly and confidently, like a real person. "
-        "If a tenant mentions rent, tell them to pay using the Buildium portal. "
-        "If a tenant mentions a leaking toilet, broken light, or any issue, acknowledge it, ask for more detail if needed, and say the team will follow up. "
-        "Only mention 'Liz' or 'Elsie' if they are mentioned, then say 'This will be escalated to the team and someone will reach out.'"
-    )
+def prompt_response(user_input, lang="en"):
     if lang == "es":
-        pre_prompt = (
-            "Eres una recepcionista virtual rápida, servicial y femenina para una empresa inmobiliaria. "
-            "Habla con fluidez y confianza como una persona real. "
-            "Si un inquilino menciona el alquiler, diles que paguen usando la aplicación o portal de Buildium. "
-            "Si mencionan problemas como una fuga o inodoro roto, reconócelo, pide detalles si es necesario y di que el equipo dará seguimiento. "
-            "Solo menciona a 'Liz' o 'Elsie' si se mencionan, luego responde que será escalado al equipo."
+        system_msg = (
+            "Eres una recepcionista virtual para una empresa inmobiliaria."
+            " Hablas rápido y claramente como una persona real. "
+            "Si el inquilino menciona alquiler, dile que use la aplicación de Buildium. "
+            "Si menciona algo roto como el baño, reconócelo y diga que será escalado. "
+            "Si mencionan a Liz o Elsie, diga que será escalado al equipo."
         )
-    messages = [
-        {"role": "system", "content": pre_prompt},
-        {"role": "user", "content": prompt}
-    ]
-    res = openai.ChatCompletion.create(model="gpt-4", messages=messages)
-    return res.choices[0].message.content.strip()
+    else:
+        system_msg = (
+            "You're a fast, fluent AI receptionist for a real estate company. "
+            "Greet clearly and confidently. "
+            "If a tenant mentions rent, tell them to pay via Buildium. "
+            "If they mention issues like leaking toilets, acknowledge and escalate. "
+            "Only mention Liz or Elsie if the caller says their name."
+        )
 
-def send_email(subject, body):
-    msg = MIMEText(body)
-    msg["Subject"] = subject
+    messages = [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": user_input}
+    ]
+
+    completion = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=messages
+    )
+
+    return completion.choices[0].message["content"]
+
+def send_summary_email(text):
+    msg = MIMEText(text)
+    msg["Subject"] = "Tenant Call Summary"
     msg["From"] = EMAIL_SENDER
     msg["To"] = EMAIL_RECEIVER
+
     with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
         server.starttls()
         server.login(SMTP_USER, SMTP_PASS)
@@ -66,36 +70,26 @@ def send_email(subject, body):
 
 @app.route("/voice", methods=["POST"])
 def voice():
-    call_sid = request.form["CallSid"]
-    speech = request.form.get("SpeechResult", "")
+    speech = request.form.get("SpeechResult", "") or request.values.get("SpeechResult", "")
     lang = detect_language(speech)
-    voice = "Polly.Maria" if lang == "es" else "Polly.Joanna"
+    voice_id = "Polly.Joanna" if lang == "en" else "Polly.Mia"
 
-    conversations.setdefault(call_sid, "")
-    conversations[call_sid] += f"User: {speech}\n"
+    # Log and process
+    reply = prompt_response(speech, lang)
+    send_summary_email(f"Tenant said: {speech}\n\nAI replied: {reply}")
 
-    if not speech:
-        return Response(str(VoiceResponse().say("Hello, this is the AI assistant from GRHUSA Properties. You can speak to me like a person. How can I help?", voice="Polly.Joanna", language="en-US")), mimetype="application/xml")
+    resp = VoiceResponse()
+    intro = "Hello, this is the AI assistant from GRHUSA Properties. You can talk to me like a human. How can I help?" if lang == "en" else "Hola, soy la asistente virtual de GRHUSA Properties. ¿Cómo puedo ayudarte?"
+    resp.say(intro, voice=voice_id, language="en-US" if lang == "en" else "es-US")
+    resp.pause(length=1)
+    resp.say(reply, voice=voice_id, language="en-US" if lang == "en" else "es-US")
+    resp.listen(timeout=6, speech_timeout="auto")
 
-    reply = generate_response(speech, lang)
-    conversations[call_sid] += f"Assistant: {reply}\n"
+    return Response(str(resp), mimetype="text/xml")
 
-    response = VoiceResponse()
-    response.say(reply, voice=voice, language="es-US" if lang == "es" else "en-US")
-    response.listen()
-    return Response(str(response), mimetype="application/xml")
-
-@app.route("/end", methods=["POST"])
-def end():
-    call_sid = request.form["CallSid"]
-    summary_prompt = "Summarize this tenant conversation and highlight actions needed: " + conversations.get(call_sid, "")
-    summary = generate_response(summary_prompt)
-    send_email("Tenant Call Summary", summary)
-
-    response = VoiceResponse()
-    response.say("Thank you for calling. We'll follow up shortly.", voice="Polly.Joanna")
-    response.hangup()
-    return Response(str(response), mimetype="application/xml")
+@app.route("/", methods=["GET"])
+def health_check():
+    return "AI assistant is running", 200
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000, host="0.0.0.0")
+    app.run(host="0.0.0.0", port=5000)
