@@ -12,7 +12,10 @@ app = Flask(__name__)
 openai.api_key = os.getenv("OPENAI_API_KEY")
 twilio_sid = os.getenv("TWILIO_SID")
 twilio_token = os.getenv("TWILIO_AUTH_TOKEN")
-
+@app.route("/voice", methods=["POST"])
+def voice():
+    print("🛎️ /voice hit!", flush=True)
+    # ...
 # Email for summary
 EMAIL_SENDER = "notifications@grhusaproperties.net"
 EMAIL_RECEIVER = "andrew@grhusaproperties.net"
