@@ -1,89 +1,69 @@
-
 from flask import Flask, request, Response
 from twilio.twiml.voice_response import VoiceResponse
 from langdetect import detect
 import openai
 import os
-from flask import Flask, request, Response
-from twilio.twiml.voice_response import VoiceResponse
-import os
 
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "AI receptionist is live."
-
-@app.route("/voice", methods=["POST"])
-def voice():
-    response = VoiceResponse()
-    response.say(
-        "Hello, this is the AI assistant from GRHUSA Properties. "
-        "You can talk to me like a human. How can I help you today?",
-        voice='Polly.Matthew',
-        language='en-US'
-    )
-    response.listen(timeout=5)
-    response.say("Thank you. A team member will follow up with you shortly.")
-    return Response(str(response), mimetype='application/xml')
-
-if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=int(os.getenv("PORT", 5000)))
-
-app = Flask(__name__)
+# Set your OpenAI and email keys
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-conversations = {}
+app = Flask(__name__)
 
-def detect_language(text):
+def generate_ai_response(prompt, lang='en'):
+    system_instruction = "You are a smart, polite AI receptionist for a property management company. Respond naturally like a human and stay helpful."
+    if lang == "es":
+        system_instruction = "Eres una recepcionista inteligente y amable para una compañía de administración de propiedades. Responde naturalmente y de forma útil."
+
+    completion = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": prompt}
+        ]
+    )
+    return completion.choices[0].message.content.strip()
+
+@app.route("/voice", methods=["POST"])
+def voice_reply():
+    response = VoiceResponse()
+    transcript = request.values.get("SpeechResult", "").strip()
+    
+    # Detect language or default to English
     try:
-        return detect(text)
+        lang = detect(transcript) if transcript else "en"
     except:
-        return 'en'
+        lang = "en"
 
-def generate_response(prompt, language):
-    system_prompt = "You are a professional, polite, and helpful AI receptionist for GRHUSA Properties. Help with maintenance, lease, or rent questions. If the caller mentions Liz or Elsie, respond you'll notify the team."
-    if language == 'es':
-        system_prompt = "Eres un recepcionista de IA profesional, cortés y servicial para GRHUSA Properties. Ayuda con mantenimiento, contrato de arrendamiento o pagos de renta. Si mencionan a Liz o Elsie, responde que notificarás al equipo."
+    # Greeting (only if call just started)
+    if not transcript:
+        response.say("Hello this is the AI assistant from GRHUSA Properties. You can talk to me like a human. How can I help you?", voice='Polly.Joanna')
+        response.listen()
+        return Response(str(response), mimetype="application/xml")
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": prompt}
-    ]
+    # Special person routing
+    if "liz" in transcript.lower() or "elsie" in transcript.lower():
+        response.say("I'll forward this conversation to Liz or Elsie. Someone from our team will reach out to you shortly.", voice='Polly.Joanna' if lang == 'en' else 'Polly.Lupe')
+        response.hangup()
+        return Response(str(response), mimetype="application/xml")
 
-    try:
-        response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=messages)
-        return response.choices[0].message.content.strip()
-    except:
-        return "I'm sorry, I'm currently experiencing a technical issue."
+    # Handle known scenarios quickly
+    lower_text = transcript.lower()
+    if "leak" in lower_text or "toilet" in lower_text or "pipe" in lower_text:
+        msg = "Thanks for reporting the plumbing issue. We'll dispatch maintenance shortly."
+    elif "rent" in lower_text or "pay" in lower_text:
+        msg = "You can pay your rent on the Buildium tenant portal. Let us know if you need help logging in."
+    elif "lease" in lower_text or "sign" in lower_text:
+        msg = "We can help you with your lease signing. A team member will contact you shortly."
+    else:
+        msg = generate_ai_response(transcript, lang)
 
-@app.route("/voice", methods=['POST'])
-def voice():
-    call_sid = request.form['CallSid']
-    speech_result = request.form.get('SpeechResult', '')
-    language = detect_language(speech_result)
+    response.say(msg, voice='Polly.Joanna' if lang == 'en' else 'Polly.Lupe')
+    response.listen()
+    return Response(str(response), mimetype="application/xml")
 
-    if call_sid not in conversations:
-        conversations[call_sid] = []
-        greeting = "Hello, this is the AI assistant from GRHUSA Properties. You can talk to me like a human. How can I help?"
-        voice = 'Joanna'
-        if language == 'es':
-            greeting = "Hola, soy el asistente virtual de GRHUSA Properties. Puedes hablar conmigo como si fuera una persona. ¿En qué puedo ayudarte?"
-            voice = 'Conchita'
-        resp = VoiceResponse()
-        gather = resp.gather(input="speech", action="/voice", method="POST", timeout=5)
-        gather.say(greeting, voice=voice)
-        return Response(str(resp), mimetype='application/xml')
-
-    conversations[call_sid].append(speech_result)
-    language = detect_language(speech_result)
-    reply = generate_response(speech_result, language)
-    voice = 'Joanna' if language == 'en' else 'Conchita'
-
-    resp = VoiceResponse()
-    resp.say(reply, voice=voice)
-    resp.hangup()
-    return Response(str(resp), mimetype='application/xml')
+@app.route("/", methods=["GET"])
+def home():
+    return "GRHUSA AI Assistant is running."
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, port=5000)
