@@ -7,6 +7,35 @@ import smtplib
 from email.mime.text import MIMEText
 
 app = Flask(__name__)
+@app.route("/voice", methods=["POST"])
+def voice():
+    call_sid = request.form.get("CallSid")
+    speech = request.form.get("SpeechResult", "")
+    stage = request.form.get("SpeechResult") is not None
+
+    print(f"📞 callSid={call_sid} stage={stage} speech='{speech}'", flush=True)
+
+    resp = VoiceResponse()
+
+    if not stage:
+        # Step 1: Intro and listen
+        resp.say(
+            "Hello, this is the AI assistant from GRHUSA Properties. You can talk to me like a human. How can I help?",
+            voice="Polly.Joanna", language="en-US"
+        )
+        resp.listen(timeout=6, speech_timeout="auto")
+    else:
+        # Step 2: User replied -> analyze
+        lang = detect_language(speech)
+        reply = prompt_response(speech, lang)
+        send_summary_email(f"Tenant said: {speech}\n\nAI replied: {reply}")
+
+        resp.say(reply, voice="Polly.Joanna" if lang == "en" else "Polly.Mia",
+                 language="en-US" if lang == "en" else "es-US")
+        # End call
+        resp.hangup()
+
+    return Response(str(resp), mimetype="application/xml")
 
 # Load secrets
 openai.api_key = os.getenv("OPENAI_API_KEY")
