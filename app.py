@@ -1,3 +1,4 @@
+
 import os
 from flask import Flask, request, Response
 from twilio.twiml.voice_response import VoiceResponse, Gather, Record
@@ -5,18 +6,19 @@ import smtplib
 from email.mime.text import MIMEText
 from langdetect import detect
 from openai import OpenAI
-from datetime import datetime
 
 app = Flask(__name__)
 
-# Environment Variables
+# Load secrets
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM")
-EMAIL_TO = os.getenv("EMAIL_TO")
+EMAIL_TO = "andrew@grhusaproperties.net"
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
+
+conversation_memory = {}
 
 def detect_language(text):
     try:
@@ -24,46 +26,49 @@ def detect_language(text):
     except:
         return "en"
 
-def generate_response(user_input, lang="en"):
+def generate_response(sid, user_input, lang="en"):
+    history = conversation_memory.get(sid, [])
+
     system_prompt = (
-        "You are a smart, caring, and human-like AI receptionist for a property management company. "
-        "If the tenant mentions rent, tell them to use the Buildium portal to pay. "
-        "If there's a problem like a leak or broken toilet, ask for the property address and apartment number, "
-        "advise them to submit a maintenance ticket via Buildium, and say the call will be sent to the team. "
-        "If Liz or Elsie are mentioned, say: 'This will be escalated to the team and someone will reach out.' "
-        "Only stop talking when the caller speaks (barge-in), and resume politely. Avoid sounding robotic or repetitive."
+        "You're a smart, respectful, and responsive AI receptionist for a real estate company. "
+        "You ask questions and help troubleshoot, then remember what they say, and further conversation like a human" 
+        "Respond fluently like a human. Stop speaking if the user interrupts and reanalyze the latest concern. "
+        "If tenant mentions a broken toilet, leaking pipe, or other issue, acknowledge it and ask: 'what is your property address and apartment number?' "
+        "Once that info is received, respond empathetically and say this call will be sent to the team. "
+        "Only at the end, after all problems are discussed, tell them to submit a maintenance request through the Buildium resident portal. "
+        "Never repeat the same response. End the call only when the tenant says bye or hangs up. "
+        "Mention Liz or Elsie only if the tenant says their names."
         if lang == "en" else
-        "Eres una recepcionista virtual humana y amable para una empresa de bienes raíces. "
-        "Si mencionan la renta, diles que usen la aplicación de Buildium. "
-        "Si mencionan un problema, pregunta por la dirección y número del apartamento, "
-        "indica que ingresen un ticket de mantenimiento y que esta llamada se enviará al equipo. "
-        "Si mencionan a Liz o Elsie, responde: 'Esto será escalado al equipo y alguien se comunicará.'"
+        "Eres una recepcionista inteligente y respetuosa para una empresa de bienes raíces. "
+        "Habla como un humano, y si el inquilino interrumpe, escucha y responde con empatía. "
+        "Si mencionan problemas, pide su dirección y número de apartamento. Al final, recuérdales usar Buildium para tickets."
     )
-    completion = client.chat.completions.create(
+
+    messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": user_input}]
+    response = client.chat.completions.create(
         model="gpt-4",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_input}
-        ]
+        messages=messages
     )
-    return completion.choices[0].message.content.strip()
+    reply = response.choices[0].message.content.strip()
+    conversation_memory[sid] = messages + [{"role": "assistant", "content": reply}]
+    return reply
 
-def send_email(subject, body):
-    try:
-        msg = MIMEText(body)
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_FROM
-        msg["To"] = EMAIL_TO
+def send_email_summary(sid):
+    history = conversation_memory.get(sid, [])
+    text = "\n".join([f"{msg['role'].capitalize()}: {msg['content']}" for msg in history])
+    msg = MIMEText(text)
+    msg["Subject"] = "Tenant Call Summary"
+    msg["From"] = EMAIL_FROM
+    msg["To"] = EMAIL_TO
 
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(EMAIL_FROM, EMAIL_TO.split(",")[0], msg.as_string())
-    except Exception as e:
-        print(f"Email error: {e}")
+    with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASS)
+        server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
 
 @app.route("/voice", methods=["POST"])
 def voice():
+    sid = request.values.get("CallSid", "default")
     speech = request.values.get("SpeechResult", "").lower()
     lang = detect_language(speech)
     voice_id = "Polly.Kimberly" if lang == "en" else "Lucia"
@@ -71,52 +76,29 @@ def voice():
 
     resp = VoiceResponse()
 
+    if "bye" in speech or "adios" in speech:
+        resp.say("Thank you for calling. Goodbye!", voice=voice_id, language=language_code)
+        send_email_summary(sid)
+        resp.hangup()
+        return Response(str(resp), mimetype="application/xml")
+
     if not speech:
-        gather = Gather(
-            input="speech", timeout=6, speech_timeout="auto",
-            barge_in=True, action="/voice", method="POST"
-        )
-        greet = "Hello, this is the AI assistant from GRHUSA Properties. How can I help you today?" \
-            if lang == "en" else "Hola, soy la asistente de GRHUSA Properties. ¿En qué puedo ayudarte hoy?"
+        gather = Gather(input="speech", timeout=6, speech_timeout="auto", action="/voice", method="POST")
+        greet = "Hello, this is the AI assistant from GRHUSA Properties. You can talk to me like a human. How can I help?"             if lang == "en" else "Hola, soy la asistente de GRHUSA Properties. ¿Cómo puedo ayudarte?"
         gather.say(greet, voice=voice_id, language=language_code)
         resp.append(gather)
         return Response(str(resp), mimetype="application/xml")
 
-    if any(x in speech for x in ["leave a message", "voicemail", "dejar mensaje", "mensaje"]):
-        resp.say("Okay, please leave your message after the beep. We will follow up shortly.",
-                 voice=voice_id, language=language_code)
-        resp.record(max_length=90, timeout=5, transcribe=True, play_beep=True, action="/voicemail")
-        resp.say("Thank you. Goodbye!", voice=voice_id, language=language_code)
-        resp.hangup()
-        return Response(str(resp), mimetype="application/xml")
-
-    if "bye" in speech or "goodbye" in speech or "adios" in speech:
-        resp.say("Thank you for calling. Take care.", voice=voice_id, language=language_code)
-        resp.hangup()
-        return Response(str(resp), mimetype="application/xml")
-
-    reply = generate_response(speech, lang)
-    send_email("Tenant Call Summary", f"Tenant said: {speech}\n\nAI replied: {reply}")
+    reply = generate_response(sid, speech, lang)
 
     resp.say(reply, voice=voice_id, language=language_code)
-    gather = Gather(
-        input="speech", timeout=6, speech_timeout="auto",
-        barge_in=True, action="/voice", method="POST"
-    )
+    gather = Gather(input="speech", timeout=6, speech_timeout="auto", action="/voice", method="POST")
     resp.append(gather)
     return Response(str(resp), mimetype="application/xml")
 
-@app.route("/voicemail", methods=["POST"])
-def voicemail():
-    recording_url = request.values.get("RecordingUrl", "")
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    body = f"Voicemail received at {timestamp}.\n\nLink: {recording_url}"
-    send_email("New Tenant Voicemail", body)
-    return Response("OK", mimetype="text/plain")
-
 @app.route("/", methods=["GET"])
-def health_check():
-    return "✅ AI receptionist is live", 200
+def health():
+    return "✅ AI Receptionist Online", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
