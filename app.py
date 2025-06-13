@@ -8,7 +8,7 @@ from email.mime.text import MIMEText
 
 app = Flask(__name__)
 
-# Load secrets
+# Environment secrets
 openai.api_key = os.getenv("OPENAI_API_KEY")
 EMAIL_SENDER = "notifications@grhusaproperties.net"
 EMAIL_RECEIVER = "andrew@grhusaproperties.net"
@@ -17,7 +17,6 @@ SMTP_PORT = 587
 SMTP_USER = os.getenv("EMAIL_USER")
 SMTP_PASS = os.getenv("EMAIL_PASS")
 
-
 def detect_language(text):
     try:
         lang = detect(text)
@@ -25,86 +24,74 @@ def detect_language(text):
     except:
         return "en"
 
-
 def prompt_response(user_input, lang="en"):
-    if lang == "es":
-        system_msg = (
-            "Eres una asistente virtual rápida y profesional para una empresa inmobiliaria. "
-            "Habla como una mujer real. Si se menciona el alquiler, indica que deben usar la aplicación Buildium. "
-            "Si se menciona un problema como un inodoro con fugas o una tubería rota, reconócelo y di que se informará al equipo. "
-            "Si se menciona a Liz o Elsie, responde que se enviará al equipo."
+    system_msg = {
+        "en": (
+            "You're a warm, confident, fast-speaking female AI receptionist for GRHUSA Properties. "
+            "Start with 'Hi, this is the AI assistant from GRHUSA Properties. You can speak to me naturally. How can I help you today?'. "
+            "If the caller talks about rent, urge them to use the Buildium portal or app. "
+            "If they mention a broken toilet, leak, or repair, acknowledge it and say it will be escalated. "
+            "If Liz or Elsie are mentioned, say 'Thanks, this will be escalated to the team and someone will follow up.'"
+        ),
+        "es": (
+            "Eres una recepcionista virtual amable, rápida y profesional para GRHUSA Properties. "
+            "Comienza con 'Hola, soy la asistente virtual de GRHUSA Properties. Puedes hablarme como si fuera una persona real. ¿En qué puedo ayudarte?'. "
+            "Si mencionan alquiler, dile que usen la app de Buildium. "
+            "Si mencionan problemas como inodoros rotos o fugas, reconócelo y di que se escalará. "
+            "Si mencionan a Liz o Elsie, responde que se escalará al equipo y alguien los contactará."
         )
-    else:
-        system_msg = (
-            "You're a fast, helpful, fluent female AI receptionist for a real estate company. "
-            "Speak confidently, like a real person. If the tenant mentions rent, tell them to use the Buildium app. "
-            "If they mention something like a leaking toilet or pipe, acknowledge and say it’ll be escalated to the team. "
-            "Only say 'Liz or Elsie will follow up' if those names are mentioned."
-        )
+    }
 
     messages = [
-        {"role": "system", "content": system_msg},
+        {"role": "system", "content": system_msg[lang]},
         {"role": "user", "content": user_input}
     ]
 
-    completion = openai.ChatCompletion.create(
-        model="gpt-4",
-        messages=messages
-    )
+    completion = openai.ChatCompletion.create(model="gpt-4", messages=messages)
     return completion.choices[0].message["content"]
 
-
-def send_summary_email(summary_text):
+def send_summary_email(text):
     if not SMTP_USER or not SMTP_PASS:
-        print("❌ SMTP credentials are missing.")
+        print("Missing SMTP credentials")
         return
-
-    msg = MIMEText(summary_text)
-    msg["Subject"] = "Tenant Call Summary"
-    msg["From"] = EMAIL_SENDER
-    msg["To"] = EMAIL_RECEIVER
-
     try:
+        msg = MIMEText(text)
+        msg["Subject"] = "Tenant Call Summary"
+        msg["From"] = EMAIL_SENDER
+        msg["To"] = EMAIL_RECEIVER
+
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASS)
             server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
-            print("✅ Email sent.")
     except Exception as e:
-        print(f"❌ Email send failed: {e}")
-
+        print(f"[EMAIL ERROR] {e}")
 
 @app.route("/voice", methods=["POST"])
-def handle_call():
-    speech = request.form.get("SpeechResult", "")
-    call_sid = request.form.get("CallSid", "")
-    print(f"📞 Incoming call: {call_sid} | Speech: {speech}")
-
+def voice():
+    speech = request.form.get("SpeechResult")
     resp = VoiceResponse()
 
     if not speech:
-        gather = Gather(input="speech", timeout=6, speech_timeout="auto", action="/voice", method="POST")
-        gather.say("Hello! This is the AI assistant from GRHUSA Properties. You can talk to me like a real person. How can I help?",
-                   voice="Polly.Joanna", language="en-US")
+        gather = Gather(input="speech", timeout=5, speech_timeout="auto", action="/voice", method="POST")
+        gather.say(
+            "Hello, this is the AI assistant from GRHUSA Properties. You can speak to me like a real person. How can I help you today?",
+            voice="Polly.Joanna", language="en-US"
+        )
         resp.append(gather)
         return Response(str(resp), mimetype="text/xml")
 
     lang = detect_language(speech)
     reply = prompt_response(speech, lang)
-
-    # Send conversation summary via email
     send_summary_email(f"Tenant said: {speech}\n\nAI replied: {reply}")
 
-    voice_id = "Polly.Joanna" if lang == "en" else "Polly.Mia"
-    resp.say(reply, voice=voice_id, language="en-US" if lang == "en" else "es-US")
+    resp.say(reply, voice="Polly.Joanna" if lang == "en" else "Polly.Mia", language="en-US" if lang == "en" else "es-US")
     resp.hangup()
     return Response(str(resp), mimetype="text/xml")
 
-
 @app.route("/", methods=["GET"])
-def health_check():
-    return "✅ AI assistant is running", 200
-
+def health():
+    return "AI receptionist is running.", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
