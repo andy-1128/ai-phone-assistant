@@ -78,7 +78,7 @@ def voice():
     if recording_url:
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         recording_link = f"{recording_url}.mp3"
-        content = f"Voicemail received at {timestamp}.
+        content = f"Voicemail received at {timestamp}."
 Listen: {recording_link}"
         send_email("New Tenant Voicemail", content)
         resp.say("Thank you for your message. Someone will reach out shortly. Goodbye.", voice=voice_id, language=language_code)
