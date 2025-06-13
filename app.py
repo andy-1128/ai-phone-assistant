@@ -1,6 +1,6 @@
 import os
 from flask import Flask, request, Response
-from twilio.twiml.voice_response import VoiceResponse, Gather
+from twilio.twiml.voice_response import VoiceResponse, Gather, Record
 import smtplib
 from email.mime.text import MIMEText
 from langdetect import detect
@@ -9,7 +9,7 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# ENV Variables
+# Environment variables
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 EMAIL_TO = os.getenv("EMAIL_TO")
@@ -26,17 +26,21 @@ def detect_language(text):
 
 def generate_response(user_input, lang="en"):
     system_prompt = (
-        "You are a professional and warm AI receptionist for a real estate company. "
-        "Respond conversationally like a human. If the caller mentions rent, tell them to use the Buildium app. "
-        "You are respectable and caring, help problem solve and troubleshoot" 
-        "If they mention issues like broken toilets, leaks, or damage, express empathy and state the team will follow up. "
-        "Only mention Liz or Elsie if the caller says their names, and reply that 'this will be escalated to the team and someone will reach out.'"
+        "You are a professional and friendly AI receptionist for a real estate property company called GRHUSA. "
+        "Converse naturally, respond intelligently to any topic, and engage warmly. "
+        "If the caller talks about rent, tell them to pay using the Buildium app or resident portal. "
+        "If the caller mentions a problem (e.g. leaking toilet, broken appliance), ask for the property address and apartment number. "
+        "Tell them to submit a maintenance ticket in the Buildium portal, and say this call will be forwarded to the team. "
+        "Only mention Liz or Elsie if the tenant says their names. Then say 'this will be escalated to the team and someone will reach out.'"
         if lang == "en" else
-        "Eres una recepcionista profesional para una empresa inmobiliaria. "
-        "Responde como un humano con empatía. Si mencionan el alquiler, dile que usen la aplicación Buildium. "
-        "Si mencionan problemas como inodoros rotos o fugas, reconócelo y di que el equipo dará seguimiento. "
-        "Solo menciona a Liz o Elsie si el inquilino dice su nombre — responde que será escalado al equipo."
+        "Eres una recepcionista profesional y amable para una empresa inmobiliaria llamada GRHUSA. "
+        "Habla como humano, responde con empatía y amabilidad. "
+        "Si hablan del alquiler, diles que paguen usando la aplicación o portal Buildium. "
+        "Si mencionan un problema (ej. inodoro roto, fuga), pide la dirección de la propiedad y el número del apartamento. "
+        "Diles que ingresen un ticket en el portal de Buildium y que esta llamada será enviada al equipo. "
+        "Solo menciona a Liz o Elsie si ellos las mencionan — responde que se escalará al equipo."
     )
+
     completion = client.chat.completions.create(
         model="gpt-4",
         messages=[
@@ -58,7 +62,7 @@ def send_email(subject, body):
             server.login(SMTP_USER, SMTP_PASS)
             server.sendmail(EMAIL_FROM, EMAIL_TO.split(",")[0], msg.as_string())
     except Exception as e:
-        print(f"Email error: {e}")
+        print(f"[Email Error] {e}")
 
 @app.route("/voice", methods=["POST"])
 def voice():
@@ -69,29 +73,40 @@ def voice():
 
     resp = VoiceResponse()
 
+    # No input yet — greet and listen
     if not speech:
         gather = Gather(
             input="speech", timeout=6, speech_timeout="auto",
             action="/voice", method="POST"
         )
-        greet = "Hello, this is the AI assistant from GRHUSA Properties. How can I help?" if lang == "en" else "Hola, soy la asistente virtual de GRHUSA Properties. ¿En qué puedo ayudarte?"
+        greet = "Hello, this is the AI assistant from GRHUSA Properties. How can I help you today?" \
+            if lang == "en" else \
+            "Hola, soy la asistente virtual de GRHUSA Properties. ¿Cómo puedo ayudarte hoy?"
         gather.say(greet, voice=voice_id, language=language_code)
         resp.append(gather)
         return Response(str(resp), mimetype="application/xml")
 
-    # Voicemail condition
+    # Voicemail trigger
     if any(x in speech for x in ["leave a message", "voicemail", "dejar mensaje", "mensaje"]):
         resp.say("Sure, leave your message after the beep. We will follow up shortly.", voice=voice_id, language=language_code)
-        resp.record(max_length=60, timeout=5, transcribe=True, play_beep=True, action="/voicemail")
+        resp.record(max_length=90, timeout=5, transcribe=True, play_beep=True, action="/voicemail")
         resp.say("Thank you. Goodbye!", voice=voice_id, language=language_code)
         resp.hangup()
         return Response(str(resp), mimetype="application/xml")
 
+    # AI reply
     reply = generate_response(speech, lang)
     send_email("Tenant Call Summary", f"Tenant said: {speech}\n\nAI replied: {reply}")
 
+    # Voice assistant responds
     resp.say(reply, voice=voice_id, language=language_code)
-    gather = Gather(input="speech", timeout=6, speech_timeout="auto", action="/voice", method="POST")
+
+    # Start new gather right away after speaking so user can interrupt and keep flowing
+    gather = Gather(
+        input="speech", timeout=6, speech_timeout="auto",
+        action="/voice", method="POST"
+    )
+    gather.say("You can speak now, I’m listening.", voice=voice_id, language=language_code)
     resp.append(gather)
     return Response(str(resp), mimetype="application/xml")
 
@@ -101,7 +116,7 @@ def voicemail():
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     body = f"Voicemail received at {timestamp}.\n\nListen to the voicemail here:\n{recording_url}"
     send_email("New Tenant Voicemail", body)
-    return Response("OK", mimetype="text/plain")
+    return Response("Voicemail logged", mimetype="text/plain")
 
 @app.route("/", methods=["GET"])
 def health_check():
