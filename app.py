@@ -1,7 +1,7 @@
 
 import os
 from flask import Flask, request, Response
-from twilio.twiml.voice_response import VoiceResponse, Gather
+from twilio.twiml.voice_response import VoiceResponse, Gather, Record
 import smtplib
 from email.mime.text import MIMEText
 from langdetect import detect
@@ -28,8 +28,8 @@ def generate_response(user_input, lang="en"):
     system_prompt = (
         "You are a fast, fluent, helpful AI receptionist for a real estate company. "
         "Speak like a natural human. If the tenant mentions rent, tell them to pay using the Buildium app. "
-        "You conversate like a human and respond to questions and concerns"
-        "You are respectable and caring about problems and concerns"
+        "You conversate like a human and respond to questions and concerns. "
+        "You are respectable and caring about problems and concerns. "
         "If they mention a problem like a broken toilet or leak, acknowledge and say the team will follow up. "
         "Only mention Liz or Elsie if the tenant says their name — then respond 'this will be escalated to the team and someone will reach out.'"
         if lang == "en" else
@@ -64,9 +64,9 @@ def send_email_summary(speech, reply):
 
 @app.route("/voice", methods=["POST"])
 def voice():
-    speech = request.values.get("SpeechResult", "")
+    speech = request.values.get("SpeechResult", "").lower()
     lang = detect_language(speech)
-    voice_id = "Polly.Joanna" if lang == "en" else "Polly.Mia"
+    voice_id = "Polly.Kimberly" if lang == "en" else "Polly.Lupe"
     language_code = "en-US" if lang == "en" else "es-US"
 
     resp = VoiceResponse()
@@ -79,14 +79,19 @@ def voice():
             action="/voice",
             method="POST"
         )
-        gather.say(
-            "Hello, this is the AI assistant from GRHUSA Properties. You can talk to me like a human. How can I help?",
-            voice=voice_id, language=language_code
-        )
+        greet = "Hello, this is the AI assistant from GRHUSA Properties. You can talk to me like a human. How can I help?"             if lang == "en" else "Hola, soy la asistente de GRHUSA Properties. ¿Cómo puedo ayudarte?"
+        gather.say(greet, voice=voice_id, language=language_code)
         resp.append(gather)
         return Response(str(resp), mimetype="application/xml")
 
-    # Handle response
+    # Voicemail trigger phrases
+    if any(keyword in speech for keyword in ["leave a message", "voicemail", "mensaje", "dejar mensaje"]):
+        resp.say("Sure, leave your message after the beep. We’ll follow up as soon as possible.", voice=voice_id, language=language_code)
+        resp.record(max_length=60, timeout=5, transcribe=True, play_beep=True)
+        resp.say("Thank you for your message. Goodbye.", voice=voice_id, language=language_code)
+        resp.hangup()
+        return Response(str(resp), mimetype="application/xml")
+
     reply = generate_response(speech, lang)
     send_email_summary(speech, reply)
 
