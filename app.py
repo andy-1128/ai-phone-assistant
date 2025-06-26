@@ -10,7 +10,6 @@ from datetime import datetime
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "temp_secret")
 
-# Env vars
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 SMTP_USER = os.getenv("SMTP_USER")
@@ -18,7 +17,6 @@ SMTP_PASS = os.getenv("SMTP_PASS")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Memory per call
 memory = {}
 
 def detect_language(text):
@@ -29,15 +27,15 @@ def detect_language(text):
 
 def generate_response(user_input, lang="en", memory_state=None):
     system_prompt = (
-        "You are a smart, fluent, professional AI receptionist for a property management company. "
-        "Respond naturally and slowly like a human. If the tenant interrupts, stop and listen again. "
-        "Only ask one question at a time. Understand rent concerns, maintenance issues, and store address/apartment info. "
-        "At the end, suggest using the Buildium portal. Do not hang up unless they say goodbye."
+        "You are a smart, fluent, human-like AI receptionist for a real estate company. "
+        "Speak slowly, warmly, and clearly. Only ask one question at a time. "
+        "If interrupted, stop and listen again. Store address and issues. "
+        "Understand words like rent, apartment, leaking, and recommend Buildium at the end."
     ) if lang == "en" else (
-        "Eres una recepcionista de IA profesional y fluida para una empresa de bienes raíces. "
-        "Habla lentamente, con voz humana. Si el inquilino interrumpe, detente y escucha. "
-        "Haz una pregunta a la vez. Comprende palabras como baño, fuga, renta, apartamento, inodoro. "
-        "Al final, sugiere usar el portal de Buildium. No cuelgues, a menos que digan adiós."
+        "Eres una recepcionista de IA profesional, cálida y fluida en español. "
+        "Habla con claridad y voz natural. Haz solo una pregunta a la vez. "
+        "Detente si el inquilino interrumpe. Comprende palabras como baño, fuga, renta, apartamento, inodoro. "
+        "Sugiere Buildium si se habla de alquiler. No cuelgues a menos que digan adiós."
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -48,8 +46,8 @@ def generate_response(user_input, lang="en", memory_state=None):
     completion = client.chat.completions.create(
         model="gpt-4",
         messages=messages,
-        temperature=0.6,
-        max_tokens=200
+        temperature=0.5,
+        max_tokens=150
     )
     return completion.choices[0].message.content.strip()
 
@@ -76,17 +74,19 @@ def voice():
     call_sid = request.values.get("CallSid")
     speech = request.values.get("SpeechResult", "").strip()
 
-    # Detect once and store per call
+    # Store language on first interaction only
     if call_sid not in memory:
-        lang = detect_language(speech)
-        memory[call_sid] = {"lang": lang, "history": []}
+        detected_lang = detect_language(speech)
+        memory[call_sid] = {
+            "lang": detected_lang,
+            "history": []
+        }
 
     lang = memory[call_sid]["lang"]
     voice_id = "Polly.Joanna" if lang == "en" else "Polly.Lupe"
     language_code = "en-US" if lang == "en" else "es-US"
     resp = VoiceResponse()
 
-    # Greet if silent
     if not speech:
         gather = Gather(
             input="speech",
@@ -96,17 +96,17 @@ def voice():
             action="/voice",
             method="POST"
         )
-        greet = "Hello, this is the assistant from GRHUSA Properties. How can I help you today?" if lang == "en" else "Hola, soy la asistente de GRHUSA Properties. ¿En qué puedo ayudarte hoy?"
-        gather.say(greet, voice=voice_id, language=language_code)
+        greeting = "Hello, this is the assistant from GRHUSA Properties. How can I help you today?" if lang == "en" else "Hola, soy la asistente de GRHUSA Properties. ¿En qué puedo ayudarte hoy?"
+        gather.say(greeting, voice=voice_id, language=language_code)
         resp.append(gather)
         return Response(str(resp), mimetype="application/xml")
 
-    # Voicemail option
     if any(x in speech.lower() for x in ["leave a message", "voicemail", "dejar mensaje", "mensaje"]):
         resp.say("Sure, leave your message after the beep. We’ll follow up soon.", voice=voice_id, language=language_code)
         resp.record(max_length=60, timeout=5, transcribe=True, play_beep=True, action="/voicemail")
         return Response(str(resp), mimetype="application/xml")
 
+    # Store conversation and generate reply
     memory[call_sid]["history"].append({"role": "user", "content": speech})
     reply = generate_response(speech, lang, memory[call_sid]["history"])
     memory[call_sid]["history"].append({"role": "assistant", "content": reply})
@@ -125,8 +125,9 @@ def voice():
 """
     send_email("📬 Tenant Call Summary – GRHUSA", summary)
 
-    # Say reply and immediately gather again
     resp.say(reply, voice=voice_id, language=language_code)
+
+    # Re-open gather
     gather = Gather(
         input="speech",
         timeout=10,
