@@ -105,7 +105,7 @@ def voice():
 
     resp.say(reply, voice=voice_id, language=language_code)
 
-    # Gather next input — removed "go ahead" and prevent hangup
+    # Gather next input — stays open even if silent
     gather = Gather(input="speech", timeout=10, speech_timeout="auto", action="/voice", method="POST")
     resp.append(gather)
     return Response(str(resp), mimetype="application/xml")
@@ -119,4 +119,8 @@ def voicemail():
     return Response("OK", mimetype="text/plain")
 
 @app.route("/", methods=["GET"])
-def health_check_
+def health_check():
+    return "✅ AI receptionist running", 200
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
