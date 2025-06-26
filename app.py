@@ -30,12 +30,14 @@ def generate_response(user_input, lang="en", memory_state=None):
     system_prompt = (
         "You're a smart, fluent, friendly, professional AI receptionist for a property management company. "
         "Respond in a natural, slow-paced, human tone. Only ask 1 question at a time. "
-        "Store key info: property address, apartment number, maintenance issue. If they interrupt, stop and listen. "
+        "Stop talking if the user interrupts, and reanalyze their new message. "
+        "Store key info: property address, apartment number, maintenance issue. "
         "If rent is mentioned, tell them to use the Buildium portal at the end. "
         "Summarize only at the end of the call, not now. Do not hang up unless they say 'bye'."
     ) if lang == "en" else (
         "Eres una recepcionista de IA para una empresa de bienes raíces. Responde con voz natural y profesional, "
         "como si fueras humana. No hagas todas las preguntas a la vez. Haz solo una a la vez. "
+        "Detente si el inquilino interrumpe y vuelve a escuchar. "
         "Guarda información clave como la dirección y el número de apartamento. "
         "Si mencionan alquiler, recomiéndales usar el portal de Buildium al final. "
         "No cuelgues, a menos que digan 'adiós'."
@@ -43,15 +45,14 @@ def generate_response(user_input, lang="en", memory_state=None):
 
     messages = [{"role": "system", "content": system_prompt}]
     if memory_state:
-        for m in memory_state:
-            messages.extend(memory_state)
+        messages.extend(memory_state)
     messages.append({"role": "user", "content": user_input})
 
     completion = client.chat.completions.create(
         model="gpt-4",
         messages=messages,
         temperature=0.6,
-        max_tokens=200
+        max_tokens=150  # Shorter to allow faster interrupt handling
     )
     return completion.choices[0].message.content.strip()
 
@@ -88,7 +89,14 @@ def voice():
 
     # Greeting if no speech yet
     if not speech:
-        gather = Gather(input="speech", timeout=10, speech_timeout="auto", action="/voice", method="POST")
+        gather = Gather(
+            input="speech",
+            timeout=10,
+            speech_timeout="auto",
+            barge_in=True,  # ✅ Interruptible speech
+            action="/voice",
+            method="POST"
+        )
         greet = "Hello, this is the assistant from GRHUSA Properties. How can I help you today?" if lang == "en" else "Hola, soy la asistente de GRHUSA Properties. ¿En qué puedo ayudarte hoy?"
         gather.say(greet, voice=voice_id, language=language_code)
         resp.append(gather)
@@ -121,8 +129,15 @@ def voice():
 
     resp.say(reply, voice=voice_id, language=language_code)
 
-    # Keep listening even if silent
-    gather = Gather(input="speech", timeout=10, speech_timeout="auto", action="/voice", method="POST")
+    # Continue listening with interrupt support
+    gather = Gather(
+        input="speech",
+        timeout=10,
+        speech_timeout="auto",
+        barge_in=True,  # ✅ Important for interruption
+        action="/voice",
+        method="POST"
+    )
     resp.append(gather)
     return Response(str(resp), mimetype="application/xml")
 
