@@ -28,17 +28,17 @@ def detect_language(text):
 
 def generate_response(user_input, lang="en", memory_state=None):
     system_prompt = (
-        "You are a smart, fluent, friendly AI receptionist for a property management company. "
-        "Respond like a calm, professional woman. Only ask one question at a time. "
-        "If the tenant interrupts, stop immediately and listen again. "
-        "Understand variations like 'bathroom', 'toilet', 'leak', etc. "
-        "If rent is mentioned, suggest Buildium at the end. Never hang up unless they say goodbye."
+        "You're a smart, fluent, friendly, professional AI receptionist for a property management company. "
+        "Respond in a natural, slow-paced, human tone. Only ask 1 question at a time. "
+        "Store key info: property address, apartment number, maintenance issue. If they interrupt, stop and listen. "
+        "If rent is mentioned, tell them to use the Buildium portal at the end. "
+        "Summarize only at the end of the call, not now. Do not hang up unless they say 'bye'."
     ) if lang == "en" else (
-        "Eres una recepcionista de IA fluida, amable y profesional para una empresa de bienes raíces. "
-        "Responde como una mujer humana con voz natural. Haz solo una pregunta a la vez. "
-        "Si el inquilino interrumpe, detente de inmediato y vuelve a escuchar. "
-        "Entiende términos comunes como 'baño', 'inodoro', 'fuga', 'renta', 'tina', etc. "
-        "Si mencionan alquiler, recomienda el portal Buildium al final. No cuelgues a menos que digan 'adiós'."
+        "Eres una recepcionista de IA para una empresa de bienes raíces. "
+        "Responde con voz natural, fluida, y profesional como una mujer hispanohablante auténtica. "
+        "Entiende todos los acentos del español y palabras como baño, inodoro, fuga, renta, apartamento, etc. "
+        "Haz solo una pregunta a la vez. Si el inquilino interrumpe, detente y escucha. "
+        "Recomienda Buildium si mencionan el alquiler. No cuelgues a menos que digan 'adiós'."
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -77,7 +77,7 @@ def voice():
     call_sid = request.values.get("CallSid")
     speech = request.values.get("SpeechResult", "").strip()
     lang = detect_language(speech) if speech else "en"
-    voice_id = "Polly.Joanna" if lang == "en" else "Polly.Lupe"  # ✅ Only use Polly.Lupe for Spanish
+    voice_id = "Polly.Joanna" if lang == "en" else "Polly.Lupe"  # ✅ Fluent Spanish voice only
     language_code = "en-US" if lang == "en" else "es-US"
     resp = VoiceResponse()
 
@@ -115,7 +115,6 @@ def voice():
 
     resp.say(reply, voice=voice_id, language=language_code)
 
-    # 🔁 Interrupt handling: Waits & listens for response, re-registers
     gather = Gather(input="speech", timeout=10, speech_timeout="auto", action="/voice", method="POST")
     resp.append(gather)
     return Response(str(resp), mimetype="application/xml")
