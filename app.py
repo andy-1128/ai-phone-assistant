@@ -18,26 +18,24 @@ SMTP_PASS = os.getenv("SMTP_PASS")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+# Memory stores both conversation and language
 memory = {}
 
-def detect_language(text):
+def detect_language_once(speech):
     try:
-        return "es" if detect(text) == "es" else "en"
+        return "es" if detect(speech) == "es" else "en"
     except:
         return "en"
 
 def generate_response(user_input, lang="en", memory_state=None):
     system_prompt = (
-        "You are a fluent, warm, professional AI receptionist for a property management company. "
-        "Respond naturally like a helpful woman. Stop speaking immediately if the tenant talks. "
-        "Ask one question at a time. Understand maintenance problems, rent, and Spanish phrases like baño, fuga, inodoro, etc. "
-        "If rent is mentioned, recommend using the Buildium portal. Never hang up unless they say goodbye."
+        "You're a fluent, calm, helpful AI receptionist for a real estate company. "
+        "Speak slowly and clearly. Ask only one question at a time. Stop immediately if interrupted. "
+        "Understand rent issues and maintenance problems. Suggest using the Buildium portal at the end."
     ) if lang == "en" else (
-        "Eres una recepcionista de IA profesional, amable y fluida en español para una empresa de bienes raíces. "
-        "Responde como una mujer humana, con naturalidad y sin interrupciones largas. "
-        "Detente en cuanto el inquilino hable. Haz una sola pregunta a la vez. "
-        "Comprende acentos, palabras como baño, inodoro, fuga, renta, y actúa con empatía. "
-        "Al final, sugiere usar el portal Buildium si hablan del alquiler. No cuelgues, a menos que digan adiós."
+        "Eres una recepcionista de IA para una empresa de bienes raíces. "
+        "Habla lentamente y con claridad. Haz una sola pregunta a la vez. Detente si te interrumpen. "
+        "Comprende palabras como baño, inodoro, fuga, renta. Recomienda usar el portal de Buildium al final."
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -75,34 +73,47 @@ def send_email(subject, body):
 def voice():
     call_sid = request.values.get("CallSid")
     speech = request.values.get("SpeechResult", "").strip()
-    lang = detect_language(speech) if speech else "en"
+
+    # First-time setup for this call
+    if call_sid not in memory:
+        initial_lang = detect_language_once(speech)
+        memory[call_sid] = {
+            "lang": initial_lang,
+            "history": []
+        }
+
+    lang = memory[call_sid]["lang"]
     voice_id = "Polly.Joanna" if lang == "en" else "Polly.Lupe"
     language_code = "en-US" if lang == "en" else "es-US"
     resp = VoiceResponse()
 
-    if call_sid not in memory:
-        memory[call_sid] = []
-
-    # First prompt
+    # First interaction or silence
     if not speech:
-        gather = Gather(input="speech", timeout=10, speech_timeout="auto", action="/voice", method="POST", barge_in=True)
+        gather = Gather(
+            input="speech",
+            timeout=10,
+            speech_timeout="auto",
+            barge_in=True,
+            action="/voice",
+            method="POST"
+        )
         greet = "Hello, this is the assistant from GRHUSA Properties. How can I help you today?" if lang == "en" else "Hola, soy la asistente de GRHUSA Properties. ¿En qué puedo ayudarte hoy?"
         gather.say(greet, voice=voice_id, language=language_code)
         resp.append(gather)
         return Response(str(resp), mimetype="application/xml")
 
-    # Voicemail
+    # Handle voicemail
     if any(x in speech.lower() for x in ["leave a message", "voicemail", "dejar mensaje", "mensaje"]):
         resp.say("Sure, leave your message after the beep. We’ll follow up soon.", voice=voice_id, language=language_code)
         resp.record(max_length=60, timeout=5, transcribe=True, play_beep=True, action="/voicemail")
         return Response(str(resp), mimetype="application/xml")
 
-    # GPT interaction
-    memory[call_sid].append({"role": "user", "content": speech})
-    reply = generate_response(speech, lang, memory[call_sid])
-    memory[call_sid].append({"role": "assistant", "content": reply})
+    # Append user input and generate response
+    memory[call_sid]["history"].append({"role": "user", "content": speech})
+    reply = generate_response(speech, lang, memory[call_sid]["history"])
+    memory[call_sid]["history"].append({"role": "assistant", "content": reply})
 
-    # Email Summary
+    # Send summary
     summary = f"""
 📞 New Tenant Call Summary
 
@@ -116,9 +127,16 @@ def voice():
 """
     send_email("📬 Tenant Call Summary – GRHUSA", summary)
 
-    # Speak and listen
+    # Speak reply and listen for next input
     resp.say(reply, voice=voice_id, language=language_code)
-    gather = Gather(input="speech", timeout=10, speech_timeout="auto", action="/voice", method="POST", barge_in=True)
+    gather = Gather(
+        input="speech",
+        timeout=10,
+        speech_timeout="auto",
+        barge_in=True,
+        action="/voice",
+        method="POST"
+    )
     resp.append(gather)
     return Response(str(resp), mimetype="application/xml")
 
