@@ -13,7 +13,6 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "temp_secret")
 # Env vars
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM")
-EMAIL_TO = os.getenv("EMAIL_TO")
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
 
@@ -33,10 +32,12 @@ def generate_response(user_input, lang="en", memory_state=None):
         "Respond in a natural, slow-paced, human tone. Only ask 1 question at a time. "
         "Store key info: property address, apartment number, maintenance issue. If they interrupt, stop and listen. "
         "If rent is mentioned, tell them to use the Buildium portal at the end. "
+        "Speak fluent spanish if the voice is spanish. "
         "Summarize only at the end of the call, not now. Do not hang up unless they say 'bye'."
     ) if lang == "en" else (
         "Eres una recepcionista de IA para una empresa de bienes raíces. Responde con voz natural y profesional, "
         "como si fueras humana. No hagas todas las preguntas a la vez. Haz solo una a la vez. "
+        "Habla español con fluidez si la voz es española. "
         "Guarda información clave como la dirección y el número de apartamento. "
         "Si mencionan alquiler, recomiéndales usar el portal de Buildium al final. "
         "No cuelgues, a menos que digan 'adiós'."
@@ -45,7 +46,7 @@ def generate_response(user_input, lang="en", memory_state=None):
     messages = [{"role": "system", "content": system_prompt}]
     if memory_state:
         for m in memory_state:
-            messages.append(m)
+            messages.extend(memory_state)
     messages.append({"role": "user", "content": user_input})
 
     completion = client.chat.completions.create(
@@ -58,14 +59,19 @@ def generate_response(user_input, lang="en", memory_state=None):
 
 def send_email(subject, body):
     try:
+        recipients = [
+            "andrew@grhusaproperties.net",
+            "leasing@grhusaproperties.net",
+            "office@grhusaproperties.net"
+        ]
         msg = MIMEText(body)
         msg["Subject"] = subject
         msg["From"] = EMAIL_FROM
-        msg["To"] = EMAIL_TO
+        msg["To"] = ", ".join(recipients)
         with smtplib.SMTP("smtp.gmail.com", 587) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(EMAIL_FROM, EMAIL_TO.split(",")[0], msg.as_string())
+            server.sendmail(EMAIL_FROM, recipients, msg.as_string())
     except Exception as e:
         print(f"Email error: {e}")
 
@@ -101,11 +107,23 @@ def voice():
     reply = generate_response(speech, lang, memory[call_sid])
     memory[call_sid].append({"role": "assistant", "content": reply})
 
-    send_email("Tenant Call Summary", f"Tenant said: {speech}\n\nAI replied: {reply}")
+    # Summarized email
+    summary = f"""
+📞 New Tenant Call Summary
+
+🗣️ Tenant said:
+{speech}
+
+🤖 AI replied:
+{reply}
+
+🕒 Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+    send_email("📬 Tenant Call Summary – GRHUSA", summary)
 
     resp.say(reply, voice=voice_id, language=language_code)
 
-    # Gather next input — stays open even if silent
+    # Keep listening even if silent
     gather = Gather(input="speech", timeout=10, speech_timeout="auto", action="/voice", method="POST")
     resp.append(gather)
     return Response(str(resp), mimetype="application/xml")
