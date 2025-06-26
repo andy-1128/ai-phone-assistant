@@ -31,6 +31,7 @@ def generate_response(user_input, lang="en", memory_state=None):
     system_prompt = (
         "You're a smart, fluent, friendly, professional AI receptionist for a property management company. "
         "Respond in a natural, slow-paced, human tone. Only ask 1 question at a time. "
+        " You try to troubleshoot & store the information"
         "Store key info: property address, apartment number, maintenance issue. If they interrupt, stop and listen. "
         "If rent is mentioned, tell them to use the Buildium portal at the end. "
         "Summarize only at the end of the call, not now. Do not hang up unless they say 'bye'."
@@ -90,5 +91,38 @@ def voice():
         resp.append(gather)
         return Response(str(resp), mimetype="application/xml")
 
-    # Voicemail option
-    if any(x in speech.lower() for x in ["leave a message]()
+    # Voicemail option (✅ FIXED syntax)
+    if any(x in speech.lower() for x in ["leave a message", "voicemail", "dejar mensaje", "mensaje"]):
+        resp.say("Sure, leave your message after the beep. We’ll follow up soon.", voice=voice_id, language=language_code)
+        resp.record(max_length=60, timeout=5, transcribe=True, play_beep=True, action="/voicemail")
+        return Response(str(resp), mimetype="application/xml")
+
+    # Process input
+    memory[call_sid].append({"role": "user", "content": speech})
+    reply = generate_response(speech, lang, memory[call_sid])
+    memory[call_sid].append({"role": "assistant", "content": reply})
+
+    send_email("Tenant Call Summary", f"Tenant said: {speech}\n\nAI replied: {reply}")
+
+    resp.say(reply, voice=voice_id, language=language_code)
+
+    # Gather next input — do NOT hang up if silence
+    gather = Gather(input="speech", timeout=8, speech_timeout="auto", action="/voice", method="POST")
+    gather.say("Go ahead.", voice=voice_id, language=language_code)
+    resp.append(gather)
+    return Response(str(resp), mimetype="application/xml")
+
+@app.route("/voicemail", methods=["POST"])
+def voicemail():
+    recording_url = request.values.get("RecordingUrl", "")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    body = f"Voicemail received at {timestamp}.\n\nListen to the voicemail here:\n{recording_url}"
+    send_email("New Tenant Voicemail", body)
+    return Response("OK", mimetype="text/plain")
+
+@app.route("/", methods=["GET"])
+def health_check():
+    return "✅ AI receptionist running", 200
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
