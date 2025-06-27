@@ -1,4 +1,3 @@
-
 flask
 twilio
 openai
@@ -10,3 +9,4 @@ langdetect
 websockets
 openai-whisper
 boto3
+pydub
