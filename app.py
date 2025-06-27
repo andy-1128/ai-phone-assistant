@@ -6,6 +6,11 @@ from langdetect import detect
 import smtplib
 from email.mime.text import MIMEText
 from datetime import datetime
+from transcribe import start_websocket
+
+if __name__ == "__main__":
+    start_websocket()
+
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "temp_secret")
