@@ -9,3 +9,4 @@ waitress
 langdetect
 websockets
 openai-whisper
+boto3
