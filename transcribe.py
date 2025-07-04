@@ -36,7 +36,8 @@ async def handle_audio(websocket):
                     }))
 
 def start_websocket():
-    asyncio.get_event_loop().run_until_complete(
-        websockets.serve(handle_audio, "0.0.0.0", 8765)
-    )
-    asyncio.get_event_loop().run_forever()
+    loop = asyncio.new_event_loop()              # ✅ Create new loop for the thread
+    asyncio.set_event_loop(loop)                 # ✅ Bind it to the current thread
+    server = websockets.serve(handle_audio, "0.0.0.0", 8765)
+    loop.run_until_complete(server)              # ✅ Start websocket server
+    loop.run_forever()                           # ✅ Keep the loop alive
