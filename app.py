@@ -8,8 +8,11 @@ from email.mime.text import MIMEText
 from datetime import datetime
 from transcribe import start_websocket
 
+import threading
+
 if __name__ == "__main__":
-    start_websocket()
+    # Start the websocket server in a background thread
+    threading.Thread(target=start_websocket, daemon=True).start()
 
 
 app = Flask(__name__)
