@@ -1,6 +1,0 @@
-Flask
-twilio
-openai
-python-dotenv
-requests
-msal
