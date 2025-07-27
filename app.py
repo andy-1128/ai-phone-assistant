@@ -5,40 +5,30 @@ from flask import Flask, request, Response, url_for
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from openai import OpenAI
 from langdetect import detect
-from TTS.api import TTS  # Coqui TTS
+from TTS.api import TTS  # Coqui XTTS v2 (voice cloning)
 
-# -----------------------
-# Config
-# -----------------------
+# ------------- Config -------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-MAX_TURNS      = int(os.getenv("MAX_TURNS", "6"))  # how many user/assistant turns to keep
+MAX_TURNS      = int(os.getenv("MAX_TURNS", "6"))
 
-# Paths
-VOICE_SAMPLE_PATH = os.getenv("VOICE_SAMPLE_PATH", "voices/elevenlabs_sample.wav")
-STATIC_DIR        = os.getenv("STATIC_DIR", "static")
+# point this to your uploaded ElevenLabs sample
+VOICE_SAMPLE_PATH = os.getenv("VOICE_SAMPLE_PATH", "Voices/elevenlabs_sample.wav")
 
-# Make sure dirs exist
+STATIC_DIR = os.getenv("STATIC_DIR", "static")
 os.makedirs(STATIC_DIR, exist_ok=True)
-os.makedirs(os.path.dirname(VOICE_SAMPLE_PATH), exist_ok=True)
 
-# -----------------------
-# Init
-# -----------------------
-app = Flask(__name__)
+# ------------- Init -------------
+app = Flask(__name__, static_folder=STATIC_DIR)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Initialize Coqui TTS model once (slow to load)
-# xtts_v2 supports multilingual + voice cloning
-print("Loading Coqui TTS model (xtts_v2). This may take a while...")
+print("Loading Coqui XTTS v2 model (this may take a while)...")
 tts_model = TTS("tts_models/multilingual/multi-dataset/xtts_v2")
 
-# Simple in-memory store: {call_sid: {"lang": "en"/"es", "history": []}}
+# memory: { call_sid: { "lang": "en"/"es", "history": [ {role, content}, ... ] } }
 memory = {}
 
-# -----------------------
-# Helpers
-# -----------------------
+# ------------- Helpers -------------
 def safe_detect_language(text: str, default="en"):
     try:
         lang = detect(text) if text else default
@@ -46,27 +36,24 @@ def safe_detect_language(text: str, default="en"):
     except Exception:
         return default
 
-def build_system_prompt(lang: str) -> str:
+def system_prompt(lang: str) -> str:
     if lang == "es":
         return (
             "Eres una recepcionista de IA profesional para una empresa de administración de propiedades. "
-            "Responde en español, con naturalidad, ritmo pausado y tono humano. Haz solo una pregunta a la vez. "
-            "Detente si el usuario te interrumpe. Captura datos clave: dirección, número de apartamento, problema de mantenimiento. "
+            "Responde SIEMPRE en español, con naturalidad, ritmo pausado y tono humano. "
+            "Haz solo una pregunta a la vez. Captura dirección, número de apartamento y problema de mantenimiento. "
             "Si mencionan renta, recomiéndales usar el portal de Buildium al final. No cuelgues hasta que digan 'adiós'."
         )
     return (
         "You're a smart, fluent, friendly, professional AI receptionist for a property management company. "
-        "Respond in a natural, slow-paced, human tone. Only ask one question at a time. "
-        "Stop talking if the caller interrupts and re-evaluate. "
-        "Capture key info: property address, unit number, maintenance issue. "
-        "If rent is mentioned, advise using the Buildium portal at the end. "
+        "Respond ONLY in English, in a natural, slow-paced, human tone. Ask one question at a time. "
+        "Capture the address, unit number, and maintenance issue. If rent is mentioned, advise using the Buildium portal at the end. "
         "Do not hang up unless they say 'bye'."
     )
 
 def generate_response(user_input, lang, history):
-    system_prompt = build_system_prompt(lang)
     trimmed = history[-MAX_TURNS*2:] if MAX_TURNS > 0 else history
-    messages = [{"role": "system", "content": system_prompt}] + trimmed + [
+    messages = [{"role": "system", "content": system_prompt(lang)}] + trimmed + [
         {"role": "user", "content": user_input}
     ]
     try:
@@ -79,19 +66,22 @@ def generate_response(user_input, lang, history):
         return completion.choices[0].message.content.strip()
     except Exception as e:
         print("OpenAI error:", e)
-        return "Sorry, I had trouble generating a response. Could you repeat that?" if lang == "en" \
-               else "Lo siento, tuve un problema generando la respuesta. ¿Podrías repetir por favor?"
+        return (
+            "Lo siento, tuve un problema generando la respuesta. ¿Podrías repetir, por favor?"
+            if lang == "es"
+            else "Sorry, I had trouble generating a response. Could you repeat that?"
+        )
 
 def synthesize_voice(text: str, lang: str) -> str:
     """
-    Create a wav file with Coqui TTS using your downloaded ElevenLabs sample as the cloned speaker.
-    Returns the absolute URL that Twilio can play.
+    Clone the downloaded ElevenLabs voice with Coqui (offline) and
+    write an audio wav in /static so Twilio can <Play> it.
+    Returns absolute URL to the audio file, or "" on error.
     """
     ts = f"{time.time():.0f}"
-    out_name = f"resp_{ts}.wav"
-    out_path = os.path.join(STATIC_DIR, out_name)
+    filename = f"reply_{ts}.wav"
+    out_path = os.path.join(STATIC_DIR, filename)
 
-    # Coqui xtts_v2 supports language code explicitly
     lang_code = "es" if lang == "es" else "en"
 
     try:
@@ -105,15 +95,12 @@ def synthesize_voice(text: str, lang: str) -> str:
         print("Coqui TTS error:", e)
         return ""
 
-    # Build absolute URL Twilio can fetch
-    return url_for("static", filename=out_name, _external=True)
+    return url_for("static", filename=filename, _external=True)
 
-# -----------------------
-# Routes
-# -----------------------
+# ------------- Routes -------------
 @app.route("/", methods=["GET"])
 def health():
-    return "✅ AI receptionist (with offline TTS) running", 200
+    return "✅ AI receptionist (offline TTS) is running", 200
 
 @app.route("/voice", methods=["POST"])
 def voice():
@@ -123,53 +110,50 @@ def voice():
     if call_sid not in memory:
         memory[call_sid] = {"lang": "en", "history": []}
 
-    # Detect and lock language on first real user turn
+    # detect language on first real utterance
     if speech:
         detected = safe_detect_language(speech, "en")
-        if len(memory[call_sid]["history"]) == 0:
+        if len(memory[call_sid]["history"]) == 0:  # lock only at first user turn
             memory[call_sid]["lang"] = detected
 
     lang = memory[call_sid]["lang"]
     resp = VoiceResponse()
 
-    # First turn: greet & gather
+    # First round: greet & gather
     if not speech:
-        greet = "Hola, soy la asistente de GRHUSA Properties. ¿En qué puedo ayudarte hoy?" if lang == "es" \
+        greet = (
+            "Hola, soy la asistente de GRHUSA Properties. ¿En qué puedo ayudarte hoy?"
+            if lang == "es"
             else "Hello, this is the AI assistant for GRHUSA Properties. How can I help you today?"
-
-        # TTS greeting
+        )
         audio_url = synthesize_voice(greet, lang)
         if audio_url:
             resp.play(audio_url)
         else:
-            # fallback
             resp.say(greet, language="es-ES" if lang == "es" else "en-US")
 
         gather = Gather(
             input="speech",
             timeout=8,
             speech_timeout="auto",
-            action="/voice",   # loop back into same endpoint
+            action="/voice",
             method="POST"
         )
         resp.append(gather)
         return Response(str(resp), mimetype="application/xml")
 
-    # user spoke - add to history
+    # user spoke
     memory[call_sid]["history"].append({"role": "user", "content": speech})
-
-    # ask OpenAI
     reply = generate_response(speech, lang, memory[call_sid]["history"])
     memory[call_sid]["history"].append({"role": "assistant", "content": reply})
 
-    # TTS reply
     audio_url = synthesize_voice(reply, lang)
     if audio_url:
         resp.play(audio_url)
     else:
         resp.say(reply, language="es-ES" if lang == "es" else "en-US")
 
-    # keep the conversation going
+    # keep gathering
     gather = Gather(
         input="speech",
         timeout=8,
@@ -182,6 +166,5 @@ def voice():
 
 
 if __name__ == "__main__":
-    # Local run
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
