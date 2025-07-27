@@ -14,7 +14,8 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
-ELEVENLABS_VOICE_PATH = "Voices/elevenlabs_sample.wav"  # Your ElevenLabs voice file path
+ELEVENLABS_VOICE_PATH = ELEVENLABS_VOICE_PATH = "Voices/ElevenLabs_2025-07-25T15_10_26_Arabella_pvc_sp100_s63_sb100_v3.mp3"
+  # Your ElevenLabs voice file path
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 memory = {}
