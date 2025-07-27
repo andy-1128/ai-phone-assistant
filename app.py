@@ -1,129 +1,187 @@
 import os
-import json
-import queue
-import threading
-from flask import Flask, request, Response
-from twilio.twiml.voice_response import VoiceResponse, Start
-from elevenlabs import generate, save, set_api_key
+import time
+from datetime import datetime
+from flask import Flask, request, Response, url_for
+from twilio.twiml.voice_response import VoiceResponse, Gather
 from openai import OpenAI
 from langdetect import detect
-from datetime import datetime
+from TTS.api import TTS  # Coqui TTS
 
-# Initialize Flask
-app = Flask(__name__)
-
-# API Keys
+# -----------------------
+# Config
+# -----------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-set_api_key(ELEVENLABS_API_KEY)
+OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+MAX_TURNS      = int(os.getenv("MAX_TURNS", "6"))  # how many user/assistant turns to keep
+
+# Paths
+VOICE_SAMPLE_PATH = os.getenv("VOICE_SAMPLE_PATH", "voices/elevenlabs_sample.wav")
+STATIC_DIR        = os.getenv("STATIC_DIR", "static")
+
+# Make sure dirs exist
+os.makedirs(STATIC_DIR, exist_ok=True)
+os.makedirs(os.path.dirname(VOICE_SAMPLE_PATH), exist_ok=True)
+
+# -----------------------
+# Init
+# -----------------------
+app = Flask(__name__)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Memory to store conversation state
-call_memory = {}
-audio_queue = {}
+# Initialize Coqui TTS model once (slow to load)
+# xtts_v2 supports multilingual + voice cloning
+print("Loading Coqui TTS model (xtts_v2). This may take a while...")
+tts_model = TTS("tts_models/multilingual/multi-dataset/xtts_v2")
 
-# Detect language (Spanish or English)
-def detect_language(text):
+# Simple in-memory store: {call_sid: {"lang": "en"/"es", "history": []}}
+memory = {}
+
+# -----------------------
+# Helpers
+# -----------------------
+def safe_detect_language(text: str, default="en"):
     try:
-        return "es" if detect(text) == "es" else "en"
-    except:
-        return "en"
+        lang = detect(text) if text else default
+        return "es" if lang.startswith("es") else "en"
+    except Exception:
+        return default
 
-# Build system prompt for each language
-def build_system_prompt(lang):
+def build_system_prompt(lang: str) -> str:
     if lang == "es":
         return (
-            "Eres una recepcionista de IA profesional para una empresa de gestión de propiedades. "
-            "Habla como una persona real, responde de forma natural y profesional. "
-            "Haz solo una pregunta a la vez y escucha atentamente al usuario. "
-            "Si mencionan alquiler, recomiéndales usar el portal de Buildium al final. "
-            "No cuelgues hasta que digan 'adiós'."
+            "Eres una recepcionista de IA profesional para una empresa de administración de propiedades. "
+            "Responde en español, con naturalidad, ritmo pausado y tono humano. Haz solo una pregunta a la vez. "
+            "Detente si el usuario te interrumpe. Captura datos clave: dirección, número de apartamento, problema de mantenimiento. "
+            "Si mencionan renta, recomiéndales usar el portal de Buildium al final. No cuelgues hasta que digan 'adiós'."
         )
-    else:
-        return (
-            "You are a friendly, professional AI receptionist for a property management company. "
-            "Speak naturally like a real person. Only ask one question at a time. "
-            "If rent is mentioned, recommend using the Buildium portal at the end. "
-            "Do not hang up unless the caller says 'bye'."
-        )
+    return (
+        "You're a smart, fluent, friendly, professional AI receptionist for a property management company. "
+        "Respond in a natural, slow-paced, human tone. Only ask one question at a time. "
+        "Stop talking if the caller interrupts and re-evaluate. "
+        "Capture key info: property address, unit number, maintenance issue. "
+        "If rent is mentioned, advise using the Buildium portal at the end. "
+        "Do not hang up unless they say 'bye'."
+    )
 
-# Generate GPT response
 def generate_response(user_input, lang, history):
     system_prompt = build_system_prompt(lang)
-    messages = [{"role": "system", "content": system_prompt}] + history + [
+    trimmed = history[-MAX_TURNS*2:] if MAX_TURNS > 0 else history
+    messages = [{"role": "system", "content": system_prompt}] + trimmed + [
         {"role": "user", "content": user_input}
     ]
-    completion = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages,
-        temperature=0.5,
-        max_tokens=150
-    )
-    return completion.choices[0].message.content.strip()
+    try:
+        completion = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=messages,
+            temperature=0.5,
+            max_tokens=200
+        )
+        return completion.choices[0].message.content.strip()
+    except Exception as e:
+        print("OpenAI error:", e)
+        return "Sorry, I had trouble generating a response. Could you repeat that?" if lang == "en" \
+               else "Lo siento, tuve un problema generando la respuesta. ¿Podrías repetir por favor?"
 
-# Convert text to speech using ElevenLabs
-def synthesize_voice(text, lang):
-    voice_name = "Rachel" if lang == "en" else "Marina"
-    audio = generate(
-        text=text,
-        voice=voice_name,
-        model="eleven_multilingual_v2"
-    )
-    filename = f"static/tts_{datetime.now().timestamp()}.mp3"
-    save(audio, filename)
-    return filename
+def synthesize_voice(text: str, lang: str) -> str:
+    """
+    Create a wav file with Coqui TTS using your downloaded ElevenLabs sample as the cloned speaker.
+    Returns the absolute URL that Twilio can play.
+    """
+    ts = f"{time.time():.0f}"
+    out_name = f"resp_{ts}.wav"
+    out_path = os.path.join(STATIC_DIR, out_name)
 
-# Media stream endpoint (real-time audio streaming)
-@app.route("/media", methods=["POST"])
-def media_stream():
-    data = json.loads(request.data.decode("utf-8"))
-    event = data.get("event")
+    # Coqui xtts_v2 supports language code explicitly
+    lang_code = "es" if lang == "es" else "en"
 
-    call_sid = data.get("streamSid")
-    if call_sid not in audio_queue:
-        audio_queue[call_sid] = queue.Queue()
+    try:
+        tts_model.tts_to_file(
+            text=text,
+            speaker_wav=VOICE_SAMPLE_PATH,
+            language=lang_code,
+            file_path=out_path
+        )
+    except Exception as e:
+        print("Coqui TTS error:", e)
+        return ""
 
-    if event == "media":
-        # Incoming audio chunk
-        audio_queue[call_sid].put(data["media"]["payload"])
-    return Response("OK", status=200)
+    # Build absolute URL Twilio can fetch
+    return url_for("static", filename=out_name, _external=True)
 
-# Voice webhook (Twilio entry point)
+# -----------------------
+# Routes
+# -----------------------
+@app.route("/", methods=["GET"])
+def health():
+    return "✅ AI receptionist (with offline TTS) running", 200
+
 @app.route("/voice", methods=["POST"])
 def voice():
-    call_sid = request.form.get("CallSid")
-    if call_sid not in call_memory:
-        call_memory[call_sid] = {"lang": "en", "history": []}
+    call_sid = request.values.get("CallSid")
+    speech   = (request.values.get("SpeechResult") or "").strip()
 
+    if call_sid not in memory:
+        memory[call_sid] = {"lang": "en", "history": []}
+
+    # Detect and lock language on first real user turn
+    if speech:
+        detected = safe_detect_language(speech, "en")
+        if len(memory[call_sid]["history"]) == 0:
+            memory[call_sid]["lang"] = detected
+
+    lang = memory[call_sid]["lang"]
     resp = VoiceResponse()
-    start = Start()
-    start.stream(url=f"{request.url_root}media")
-    resp.append(start)
 
-    greeting = "Hello, this is GRHUSA Properties AI Assistant. How can I help you today?"
-    filename = synthesize_voice(greeting, "en")
-    resp.play(filename)
+    # First turn: greet & gather
+    if not speech:
+        greet = "Hola, soy la asistente de GRHUSA Properties. ¿En qué puedo ayudarte hoy?" if lang == "es" \
+            else "Hello, this is the AI assistant for GRHUSA Properties. How can I help you today?"
+
+        # TTS greeting
+        audio_url = synthesize_voice(greet, lang)
+        if audio_url:
+            resp.play(audio_url)
+        else:
+            # fallback
+            resp.say(greet, language="es-ES" if lang == "es" else "en-US")
+
+        gather = Gather(
+            input="speech",
+            timeout=8,
+            speech_timeout="auto",
+            action="/voice",   # loop back into same endpoint
+            method="POST"
+        )
+        resp.append(gather)
+        return Response(str(resp), mimetype="application/xml")
+
+    # user spoke - add to history
+    memory[call_sid]["history"].append({"role": "user", "content": speech})
+
+    # ask OpenAI
+    reply = generate_response(speech, lang, memory[call_sid]["history"])
+    memory[call_sid]["history"].append({"role": "assistant", "content": reply})
+
+    # TTS reply
+    audio_url = synthesize_voice(reply, lang)
+    if audio_url:
+        resp.play(audio_url)
+    else:
+        resp.say(reply, language="es-ES" if lang == "es" else "en-US")
+
+    # keep the conversation going
+    gather = Gather(
+        input="speech",
+        timeout=8,
+        speech_timeout="auto",
+        action="/voice",
+        method="POST"
+    )
+    resp.append(gather)
     return Response(str(resp), mimetype="application/xml")
 
-# Endpoint for handling user messages
-@app.route("/process", methods=["POST"])
-def process_input():
-    call_sid = request.form.get("CallSid")
-    user_input = request.form.get("SpeechResult", "")
-
-    lang = detect_language(user_input)
-    call_memory[call_sid]["lang"] = lang
-    call_memory[call_sid]["history"].append({"role": "user", "content": user_input})
-
-    reply = generate_response(user_input, lang, call_memory[call_sid]["history"])
-    call_memory[call_sid]["history"].append({"role": "assistant", "content": reply})
-
-    filename = synthesize_voice(reply, lang)
-    return Response(f"<Play>{filename}</Play>", mimetype="application/xml")
-
-@app.route("/", methods=["GET"])
-def health_check():
-    return "✅ AI Phone Assistant Running", 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    # Local run
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
