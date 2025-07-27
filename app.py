@@ -153,9 +153,12 @@ def voice():
         # play ElevenLabs greeting (absolute URL Twilio can fetch)
         greeting_url = None
         if ELEVENLABS_GREETING_FILE:
-            # ensure file lives under /static
-            # e.g. static/voices/your.mp3 => ELEVENLABS_GREETING_FILE = "voices/your.mp3"
-            greeting_url = url_for("static", filename=ELEVENLABS_GREETING_FILE, _external=True)
+            # Make sure the file exists before trying to play it
+            on_disk = os.path.join(app.static_folder, ELEVENLABS_GREETING_FILE)
+            if os.path.exists(on_disk):
+                greeting_url = url_for("static", filename=ELEVENLABS_GREETING_FILE, _external=True)
+            else:
+                log.warning("ElevenLabs greeting file not found on disk: %s", on_disk)
 
         if greeting_url:
             resp.play(greeting_url)
