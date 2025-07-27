@@ -12,3 +12,4 @@ boto3
 pydub
 gunicorn
 elevenlabs
+TTS==0.20.6 
