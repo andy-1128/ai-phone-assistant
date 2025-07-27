@@ -114,10 +114,10 @@ def voice():
     send_email("📬 New AI Call Summary – GRHUSA", summary)
 
     # Play ElevenLabs voice if available
-    if os.path.exists(ELEVENLABS_VOICE_PATH):
-        resp.play(ELEVENLABS_VOICE_PATH)
-    else:
-        resp.say(reply, voice="Polly.Joanna", language="en-US")
+   if os.path.exists(ELEVENLABS_VOICE_PATH):
+    resp.play(ELEVENLABS_VOICE_PATH)
+else:
+    resp.say(reply, voice="Polly.Joanna", language="en-US")
 
     # Continue listening
     gather = Gather(
