@@ -11,3 +11,4 @@ openai-whisper
 boto3
 pydub
 gunicorn
+elevenlabs
