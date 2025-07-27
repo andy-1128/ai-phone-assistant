@@ -16,10 +16,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 MAX_TURNS      = int(os.getenv("MAX_TURNS", "6"))
 
-# Path INSIDE your /static folder (we'll turn it into a full absolute URL)
 ELEVENLABS_GREETING_FILE = os.getenv(
     "ELEVENLABS_GREETING_FILE",
-    "voices/ElevenLabs_2025-07-25T15_10_26_Arabella_pvc_sp100_s63_sb100_v3.mp3"
+    "voices/greeting.mp3"  # <-- Must match your static/voices/greeting.mp3
 )
 
 EMAIL_FROM = os.getenv("EMAIL_FROM")
@@ -32,7 +31,7 @@ SMTP_PASS  = os.getenv("SMTP_PASS")
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("ai-phone")
 
-app = Flask(__name__, static_folder="static")  # make sure your static dir is named 'static'
+app = Flask(__name__, static_folder="static")
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # memory = { call_sid: { "lang": "en"/"es", "history": [] } }
@@ -42,13 +41,20 @@ memory = {}
 # Helpers
 # ------------------------------------------------------------------------------
 def safe_detect_language(text: str, default="en") -> str:
-    try:
-        if not text:
-            return default
-        lang = detect(text)
-        return "es" if lang.startswith("es") else "en"
-    except Exception:
+    """
+    Improved detection: checks both langdetect and Spanish keywords.
+    """
+    if not text:
         return default
+    spanish_keywords = ["hola", "gracias", "por favor", "habla", "buenos", "señor", "adiós"]
+    text_lower = text.lower()
+    try:
+        lang = detect(text)
+        if lang.startswith("es") or any(word in text_lower for word in spanish_keywords):
+            return "es"
+    except Exception:
+        pass
+    return "en"
 
 def system_prompt(lang: str) -> str:
     if lang == "es":
@@ -112,11 +118,9 @@ def greeting_for(lang: str) -> str:
             else "Hello, this is the AI assistant for GRHUSA Properties. How can I help you today?")
 
 def polly_voice_for(lang: str) -> str:
-    # Good Polly voices in Twilio
     return "Polly.Conchita" if lang == "es" else "Polly.Joanna"
 
 def twilio_language_code(lang: str) -> str:
-    # Use es-ES instead of es-US to avoid Twilio mismatch
     return "es-ES" if lang == "es" else "en-US"
 
 # ------------------------------------------------------------------------------
@@ -124,7 +128,7 @@ def twilio_language_code(lang: str) -> str:
 # ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
-    return "✅ AI receptionist running (static ElevenLabs greeting + Polly dynamic speech).", 200
+    return "✅ AI receptionist running (ElevenLabs greeting + Spanish fix).", 200
 
 @app.route("/voice", methods=["POST"])
 def voice():
@@ -134,7 +138,7 @@ def voice():
     if call_sid not in memory:
         memory[call_sid] = {"lang": "en", "history": []}
 
-    # Lock language after first real utterance
+    # Detect language on first user input
     if speech and len(memory[call_sid]["history"]) == 0:
         detected = safe_detect_language(speech, "en")
         memory[call_sid]["lang"] = detected
@@ -149,19 +153,10 @@ def voice():
     # First round: greet
     if not speech:
         greet = greeting_for(lang)
+        greeting_url = url_for("static", filename=ELEVENLABS_GREETING_FILE, _external=True)
 
-        # play ElevenLabs greeting (absolute URL Twilio can fetch)
-        greeting_url = None
-        if ELEVENLABS_GREETING_FILE:
-            # Make sure the file exists before trying to play it
-            on_disk = os.path.join(app.static_folder, ELEVENLABS_GREETING_FILE)
-            if os.path.exists(on_disk):
-                greeting_url = url_for("static", filename=ELEVENLABS_GREETING_FILE, _external=True)
-            else:
-                log.warning("ElevenLabs greeting file not found on disk: %s", on_disk)
-
-        if greeting_url:
-            resp.play(greeting_url)
+        log.info(f"Greeting file URL: {greeting_url}")
+        resp.play(greeting_url)  # Play ElevenLabs audio
 
         gather = Gather(
             input="speech",
@@ -181,7 +176,7 @@ def voice():
     reply = generate_response(speech, lang, memory[call_sid]["history"])
     memory[call_sid]["history"].append({"role": "assistant", "content": reply})
 
-    # Email the turn (optional)
+    # Email summary of the turn
     turn_summary = f"""
 📞 AI Phone Bot Turn
 CallSid: {call_sid}
