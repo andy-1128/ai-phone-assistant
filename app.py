@@ -16,9 +16,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 MAX_TURNS      = int(os.getenv("MAX_TURNS", "6"))
 
-ELEVENLABS_GREETING_FILE = os.getenv(
-    "ELEVENLABS_GREETING_FILE",
-    "voices/greeting.mp3"  # <-- Must match your static/voices/greeting.mp3
 )
 
 EMAIL_FROM = os.getenv("EMAIL_FROM")
