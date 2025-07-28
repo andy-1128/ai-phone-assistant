@@ -16,9 +16,9 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 MAX_TURNS = int(os.getenv("MAX_TURNS", "6"))
 
-EMAIL_FROM = os.getenv("EMAIL_FROM")        # e.g. home@grhusaproperties.net
-SMTP_USER = os.getenv("SMTP_USER")          # same as EMAIL_FROM
-SMTP_PASS = os.getenv("SMTP_PASS")          # Office365 app password
+EMAIL_FROM = os.getenv("EMAIL_FROM")
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASS = os.getenv("SMTP_PASS")
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.office365.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 EMAIL_TO = os.getenv("EMAIL_TO", "andrew@grhusaproperties.net")
@@ -38,7 +38,11 @@ memory = {}
 # ------------------------------------------------------------------------------
 def safe_detect_language(text, default="en"):
     try:
-        return "es" if detect(text).startswith("es") else "en"
+        lang = detect(text)
+        if len(text.split()) <= 2:
+            if any(x in text.lower() for x in ["hola", "gracias", "español"]):
+                return "es"
+        return "es" if lang.startswith("es") else "en"
     except Exception:
         return default
 
@@ -59,7 +63,11 @@ def system_prompt(lang):
     )
 
 def generate_response(user_input, lang, history):
-    messages = [{"role": "system", "content": system_prompt(lang)}] + history[-MAX_TURNS*2:] + [{"role": "user", "content": user_input}]
+    messages = [
+        {"role": "system", "content": system_prompt(lang)},
+        {"role": "user", "content": "Responde solo en español." if lang == "es" else "Respond only in English."}
+    ] + history[-MAX_TURNS*2:] + [{"role": "user", "content": user_input}]
+
     try:
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
@@ -98,7 +106,7 @@ def greeting_for(lang):
     return "Hola, soy la asistente de GRHUSA Properties. ¿En qué puedo ayudarte hoy?" if lang == "es" else "Hello, this is the AI assistant for GRHUSA Properties. How can I help you today?"
 
 def twilio_voice_for(lang):
-    return "Polly.Conchita" if lang == "es" else "Polly.Joanna"
+    return "Polly.Lupe" if lang == "es" else "Polly.Joanna"
 
 def twilio_language_code(lang):
     return "es-ES" if lang == "es" else "en-US"
@@ -184,7 +192,7 @@ def voice():
 
     if any(x in speech.lower() for x in ["bye", "goodbye", "thanks", "adios", "gracias"]):
         data["history"].append({"role": "user", "content": speech})
-        reply = "Gracias por llamar. ¡Hasta luego!" if lang == "es" else "Thanks for calling. Goodbye!"
+        reply = "Gracias por llamar a GRHUSA Properties. Que tenga un buen día. ¡Adiós!" if lang == "es" else "Thanks for calling GRHUSA Properties. Have a great day. Goodbye!"
         data["history"].append({"role": "assistant", "content": reply})
         data["done"] = True
         final_email_and_n8n(call_sid)
