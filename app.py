@@ -103,7 +103,7 @@ def post_to_n8n(payload):
         log.exception("POST to n8n failed")
 
 def greeting_for(lang):
-    return "Hola, soy la asistente de GRHUSA Properties. ¿En qué puedo ayudarte hoy?" if lang == "es" else "Hello, this is the AI assistant for GRHUSA Properties. How can I help you today?"
+    return "Hola, soy la asistente de GRHUSA Properties. ¿En qué puedo ayudarte hoy?" if lang == "es" else "Thank you for calling GRHUSA Properties. How can I help you today?"
 
 def twilio_voice_for(lang):
     return "Polly.Lupe" if lang == "es" else "Polly.Joanna"
