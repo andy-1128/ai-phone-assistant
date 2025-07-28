@@ -16,7 +16,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL   = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 MAX_TURNS      = int(os.getenv("MAX_TURNS", "6"))
 
-)
 
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 SMTP_USER  = os.getenv("SMTP_USER")
