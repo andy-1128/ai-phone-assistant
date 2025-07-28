@@ -11,21 +11,22 @@ import smtplib
 from email.mime.text import MIMEText
 import requests
 
-# --------------------------------------------------------------------------
-# Configuration
-# --------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Config
+# ------------------------------------------------------------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+MAX_TURNS = int(os.getenv("MAX_TURNS", "6"))
+
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 SMTP_USER = os.getenv("SMTP_USER")
 SMTP_PASS = os.getenv("SMTP_PASS")
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.office365.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 EMAIL_TO = os.getenv("EMAIL_TO", "andrew@grhusaproperties.net")
+
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
 ELEVENLABS_GREETING_FILE = os.getenv("ELEVENLABS_GREETING_FILE")
-
-MAX_TURNS = 6
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("ai-phone")
@@ -35,9 +36,9 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 memory = {}
 
-# --------------------------------------------------------------------------
-# Helper Functions
-# --------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
 def safe_detect_language(text, default="en"):
     try:
         if not text:
@@ -66,7 +67,7 @@ def system_prompt(lang):
     )
 
 def generate_response(user_input, lang, history):
-    trimmed = history[-MAX_TURNS*2:]
+    trimmed = history[-MAX_TURNS*2:] if MAX_TURNS > 0 else history
     messages = [{"role": "system", "content": system_prompt(lang)}] + trimmed + [{"role": "user", "content": user_input}]
     try:
         response = client.chat.completions.create(
@@ -76,7 +77,7 @@ def generate_response(user_input, lang, history):
             max_tokens=220
         )
         return response.choices[0].message.content.strip()
-    except Exception as e:
+    except Exception:
         log.exception("OpenAI error")
         return "Lo siento, ¿puedes repetir?" if lang == "es" else "Sorry, can you say that again?"
 
@@ -118,29 +119,24 @@ def final_email_and_n8n(call_sid):
     data = memory.get(call_sid, {})
     if not data:
         return
-
     lang = data.get("lang", "en")
     history = data.get("history", [])
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    turns = []
-    important = []
-
+    # Summarize or log full conversation
+    lines = []
     for msg in history:
-        who = "Tenant" if msg["role"] == "user" else "AI"
-        content = msg["content"]
-        if any(word in content.lower() for word in ["toilet", "leak", "rent", "broken", "mold", "asap", "emergency"]):
-            important.append(f"{who.upper()}: {content.upper()}")
-        turns.append(f"{who}: {content}")
+        who = "TENANT" if msg["role"] == "user" else "AI"
+        lines.append(f"{who}: {msg['content']}")
 
-    full_body = (
-        f"📞 CALL SUMMARY (CallSid: {call_sid})\n"
+    body = (
+        f"📞 AI Tenant Call Summary\n"
         f"Time: {now}\n"
-        f"Language: {lang.upper()}\n\n"
-        f"IMPORTANT:\n" + "\n".join(important) + "\n\n--- FULL CONVERSATION ---\n" + "\n".join(turns)
+        f"Language: {lang.upper()}\n\n" +
+        "\n".join(lines)
     )
 
-    send_email("📬 AI Receptionist – Tenant Call Summary", full_body)
+    send_email("📬 AI Receptionist – Final Call Summary", body)
     post_to_n8n({
         "callSid": call_sid,
         "timestamp": now,
@@ -148,9 +144,13 @@ def final_email_and_n8n(call_sid):
         "history": history
     })
 
-# --------------------------------------------------------------------------
-# Main Call Handling
-# --------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# Routes
+# ------------------------------------------------------------------------------
+@app.route("/", methods=["GET"])
+def health():
+    return "✅ AI receptionist running", 200
+
 @app.route("/voice", methods=["POST"])
 def voice():
     call_sid = request.values.get("CallSid")
@@ -184,17 +184,26 @@ def voice():
                 resp.play(greeting_url)
             except Exception:
                 log.warning("Greeting file not found.")
-        gather = Gather(input="speech", timeout=6, speech_timeout="auto", action="/voice", method="POST", barge_in=True)
+
+        gather = Gather(
+            input="speech",
+            timeout=6,
+            speech_timeout="auto",
+            action="/voice",
+            method="POST",
+            barge_in=True
+        )
         gather.say(greeting_for(lang), voice=voice_name, language=lang_code)
         resp.append(gather)
         return Response(str(resp), mimetype="application/xml")
 
+    # If tenant ends call
     if any(x in speech.lower() for x in ["bye", "goodbye", "thanks", "adios", "gracias"]):
         data["history"].append({"role": "user", "content": speech})
         reply = "Gracias por llamar. ¡Hasta luego!" if lang == "es" else "Thanks for calling. Goodbye!"
         data["history"].append({"role": "assistant", "content": reply})
-        final_email_and_n8n(call_sid)
         data["done"] = True
+        final_email_and_n8n(call_sid)
         resp.say(reply, voice=voice_name, language=lang_code)
         resp.hangup()
         return Response(str(resp), mimetype="application/xml")
@@ -205,7 +214,14 @@ def voice():
 
     resp.say(reply, voice=voice_name, language=lang_code)
 
-    gather = Gather(input="speech", timeout=6, speech_timeout="auto", action="/voice", method="POST", barge_in=True)
+    gather = Gather(
+        input="speech",
+        timeout=6,
+        speech_timeout="auto",
+        action="/voice",
+        method="POST",
+        barge_in=True
+    )
     resp.append(gather)
     return Response(str(resp), mimetype="application/xml")
 
@@ -218,10 +234,6 @@ def status():
         final_email_and_n8n(call_sid)
         memory[call_sid]["done"] = True
     return ("", 204)
-
-@app.route("/", methods=["GET"])
-def health():
-    return "✅ AI receptionist running", 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
