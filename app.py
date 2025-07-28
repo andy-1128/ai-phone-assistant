@@ -5,25 +5,24 @@ from flask import Flask, request, Response, url_for
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from openai import OpenAI
 from langdetect import detect
+import smtplib
+from email.mime.text import MIMEText
 import requests
-from msal import ConfidentialClientApplication
 
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # Config
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 MAX_TURNS = int(os.getenv("MAX_TURNS", "6"))
 
-EMAIL_RECIPIENTS = [
-    "manager1@outlook.com",
-    "manager2@outlook.com",
-    "manager3@outlook.com",
-    "manager4@outlook.com"
-]
+EMAIL_FROM = os.getenv("EMAIL_FROM")        # e.g. home@grhusaproperties.net
+SMTP_USER = os.getenv("SMTP_USER")          # same as EMAIL_FROM
+SMTP_PASS = os.getenv("SMTP_PASS")          # Office365 app password
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.office365.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+EMAIL_TO = os.getenv("EMAIL_TO", "andrew@grhusaproperties.net")
 
-MS365_CLIENT_ID = os.getenv("MS365_CLIENT_ID")
-MS365_CLIENT_SECRET = os.getenv("MS365_CLIENT_SECRET")
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
 ELEVENLABS_GREETING_FILE = os.getenv("ELEVENLABS_GREETING_FILE")
 
@@ -34,53 +33,58 @@ app = Flask(__name__, static_folder="static")
 client = OpenAI(api_key=OPENAI_API_KEY)
 memory = {}
 
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # Helpers
-# ----------------------------------------------------------------------------
-def get_access_token():
-    authority = "https://login.microsoftonline.com/common"
-    app = ConfidentialClientApplication(
-        MS365_CLIENT_ID,
-        authority=authority,
-        client_credential=MS365_CLIENT_SECRET
+# ------------------------------------------------------------------------------
+def safe_detect_language(text, default="en"):
+    try:
+        return "es" if detect(text).startswith("es") else "en"
+    except Exception:
+        return default
+
+def system_prompt(lang):
+    if lang == "es":
+        return (
+            "Eres una recepcionista de IA profesional para una empresa de administración de propiedades. "
+            "Responde SIEMPRE en español, de forma natural y con tono calmado. Haz solo una pregunta a la vez. "
+            "Recolecta: dirección, número de apartamento, problema de mantenimiento, y mejor contacto. "
+            "Si mencionan renta, diles al final que usen el portal de Buildium. No cuelgues hasta que digan 'adiós'."
+        )
+    return (
+        "You are a friendly AI receptionist for a property management company. "
+        "Respond ONLY in English with a natural, calm tone. Ask one question at a time. "
+        "Collect: property address, unit number, maintenance issue, and best callback method. "
+        "If rent is mentioned, tell them at the end to use the Buildium portal. "
+        "Do not hang up unless they say 'bye'."
     )
-    result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
-    if "access_token" in result:
-        return result["access_token"]
-    raise Exception(f"Token error: {result}")
+
+def generate_response(user_input, lang, history):
+    messages = [{"role": "system", "content": system_prompt(lang)}] + history[-MAX_TURNS*2:] + [{"role": "user", "content": user_input}]
+    try:
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=messages,
+            temperature=0.5,
+            max_tokens=220
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        log.exception("OpenAI error")
+        return "Lo siento, ¿puedes repetir?" if lang == "es" else "Sorry, can you say that again?"
 
 def send_email(subject, body):
-    if not body.strip():
-        body = "⚠️ Empty conversation. No speech recorded."
-
     try:
-        token = get_access_token()
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        email_data = {
-            "message": {
-                "subject": subject,
-                "body": {
-                    "contentType": "Text",
-                    "content": body
-                },
-                "toRecipients": [
-                    {"emailAddress": {"address": addr}} for addr in EMAIL_RECIPIENTS
-                ]
-            },
-            "saveToSentItems": "true"
-        }
-        response = requests.post(
-            "https://graph.microsoft.com/v1.0/users/me/sendMail",
-            headers=headers,
-            json=email_data
-        )
-        if response.status_code >= 300:
-            raise Exception(f"Graph email failed: {response.status_code} {response.text}")
-    except Exception as e:
-        log.error(f"EMAIL FAILED: {e}")
+        recipients = [x.strip() for x in EMAIL_TO.split(",") if x.strip()]
+        msg = MIMEText(body)
+        msg["Subject"] = subject
+        msg["From"] = EMAIL_FROM
+        msg["To"] = ", ".join(recipients)
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
+            s.starttls()
+            s.login(SMTP_USER, SMTP_PASS)
+            s.sendmail(EMAIL_FROM, recipients, msg.as_string())
+    except Exception:
+        log.exception("EMAIL FAILED via SMTP")
 
 def post_to_n8n(payload):
     if not N8N_WEBHOOK_URL:
@@ -89,12 +93,6 @@ def post_to_n8n(payload):
         requests.post(N8N_WEBHOOK_URL, json=payload, timeout=5)
     except Exception:
         log.exception("POST to n8n failed")
-
-def safe_detect_language(text, default="en"):
-    try:
-        return "es" if detect(text).startswith("es") else "en"
-    except:
-        return default
 
 def greeting_for(lang):
     return "Hola, soy la asistente de GRHUSA Properties. ¿En qué puedo ayudarte hoy?" if lang == "es" else "Hello, this is the AI assistant for GRHUSA Properties. How can I help you today?"
@@ -105,75 +103,37 @@ def twilio_voice_for(lang):
 def twilio_language_code(lang):
     return "es-ES" if lang == "es" else "en-US"
 
-def system_prompt(lang):
-    if lang == "es":
-        return (
-            "Eres una recepcionista de IA profesional para una empresa de administración de propiedades. "
-            "Responde SIEMPRE en español. Recolecta dirección de propiedad, número de apartamento, problema de mantenimiento y contacto. "
-            "Di que usen el portal de Buildium si mencionan renta. No cuelgues hasta que digan 'adiós'."
-        )
-    return (
-        "You are a professional AI receptionist for a property management company. Respond only in English. "
-        "Collect address, unit number, issue, and contact info. If rent is mentioned, refer them to the Buildium portal. "
-        "Do not hang up unless they say 'bye'."
-    )
-
-def generate_response(user_input, lang, history):
-    trimmed = history[-MAX_TURNS*2:] if MAX_TURNS > 0 else history
-    messages = [{"role": "system", "content": system_prompt(lang)}] + trimmed + [{"role": "user", "content": user_input}]
-    try:
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-            temperature=0.5,
-            max_tokens=220
-        )
-        return response.choices[0].message.content.strip()
-    except:
-        log.exception("OpenAI error")
-        return "Lo siento, ¿puedes repetir?" if lang == "es" else "Sorry, can you say that again?"
-
 def final_email_and_n8n(call_sid):
     data = memory.get(call_sid, {})
     if not data:
-        log.warning(f"No memory found for callSid: {call_sid}")
         return
-
     lang = data.get("lang", "en")
     history = data.get("history", [])
-    if not history:
-        log.warning(f"No conversation history found for callSid: {call_sid}")
-        return
-
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
     lines = []
-    for m in history:
-        role = "TENANT" if m["role"] == "user" else "AI"
-        lines.append(f"{role}: {m['content']}")
+    for msg in history:
+        who = "TENANT" if msg["role"] == "user" else "AI"
+        lines.append(f"{who}: {msg['content']}")
 
-    body = f"""
-📞 AI Tenant Call Summary  
-Time: {now}  
-Language: {lang.upper()}  
-Call SID: {call_sid}
+    body = (
+        f"📞 AI Tenant Call Summary\n"
+        f"Time: {now}\n"
+        f"Language: {lang.upper()}\n\n" +
+        "\n".join(lines)
+    )
 
-{'-'*40}
-{chr(10).join(lines)}
-"""
-
-    log.info(f"Sending final email + posting to n8n for {call_sid}")
     send_email("📬 AI Receptionist – Final Call Summary", body)
     post_to_n8n({
         "callSid": call_sid,
         "timestamp": now,
         "lang": lang,
-        "history": history,
-        "summary": body
+        "history": history
     })
 
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # Routes
-# ----------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
 def health():
     return "✅ AI receptionist running", 200
@@ -182,6 +142,7 @@ def health():
 def voice():
     call_sid = request.values.get("CallSid")
     speech = (request.values.get("SpeechResult") or "").strip()
+
     if not call_sid:
         return Response("<Response></Response>", mimetype="application/xml")
 
@@ -207,9 +168,16 @@ def voice():
             try:
                 greeting_url = url_for("static", filename=ELEVENLABS_GREETING_FILE, _external=True)
                 resp.play(greeting_url)
-            except:
+            except Exception:
                 log.warning("Greeting file not found.")
-        gather = Gather(input="speech", timeout=6, speech_timeout="auto", action="/voice", method="POST", barge_in=True)
+        gather = Gather(
+            input="speech",
+            timeout=6,
+            speech_timeout="auto",
+            action="/voice",
+            method="POST",
+            barge_in=True
+        )
         gather.say(greeting_for(lang), voice=voice_name, language=lang_code)
         resp.append(gather)
         return Response(str(resp), mimetype="application/xml")
@@ -229,7 +197,14 @@ def voice():
     data["history"].append({"role": "assistant", "content": reply})
 
     resp.say(reply, voice=voice_name, language=lang_code)
-    gather = Gather(input="speech", timeout=6, speech_timeout="auto", action="/voice", method="POST", barge_in=True)
+    gather = Gather(
+        input="speech",
+        timeout=6,
+        speech_timeout="auto",
+        action="/voice",
+        method="POST",
+        barge_in=True
+    )
     resp.append(gather)
     return Response(str(resp), mimetype="application/xml")
 
