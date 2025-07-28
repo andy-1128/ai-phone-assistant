@@ -50,6 +50,9 @@ def get_access_token():
     raise Exception(f"Token error: {result}")
 
 def send_email(subject, body):
+    if not body.strip():
+        body = "⚠️ Empty conversation. No speech recorded."
+
     try:
         token = get_access_token()
         headers = {
@@ -133,17 +136,40 @@ def generate_response(user_input, lang, history):
 def final_email_and_n8n(call_sid):
     data = memory.get(call_sid, {})
     if not data:
+        log.warning(f"No memory found for callSid: {call_sid}")
         return
+
     lang = data.get("lang", "en")
     history = data.get("history", [])
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    if not history:
+        log.warning(f"No conversation history found for callSid: {call_sid}")
+        return
 
-    lines = [f"{('TENANT' if m['role']=='user' else 'AI')}: {m['content']}" for m in history]
-    body = (
-        f"📞 AI Tenant Call Summary\nTime: {now}\nLanguage: {lang.upper()}\n\n" + "\n".join(lines)
-    )
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    lines = []
+    for m in history:
+        role = "TENANT" if m["role"] == "user" else "AI"
+        lines.append(f"{role}: {m['content']}")
+
+    body = f"""
+📞 AI Tenant Call Summary  
+Time: {now}  
+Language: {lang.upper()}  
+Call SID: {call_sid}
+
+{'-'*40}
+{chr(10).join(lines)}
+"""
+
+    log.info(f"Sending final email + posting to n8n for {call_sid}")
     send_email("📬 AI Receptionist – Final Call Summary", body)
-    post_to_n8n({"callSid": call_sid, "timestamp": now, "lang": lang, "history": history})
+    post_to_n8n({
+        "callSid": call_sid,
+        "timestamp": now,
+        "lang": lang,
+        "history": history,
+        "summary": body
+    })
 
 # ----------------------------------------------------------------------------
 # Routes
