@@ -5,6 +5,8 @@ from flask import Flask, request, Response, url_for
 from twilio.twiml.voice_response import VoiceResponse, Gather
 from openai import OpenAI
 from langdetect import detect
+import smtplib
+from email.mime.text import MIMEText
 import requests
 
 # ------------------------------------------------------------------------------
@@ -13,6 +15,14 @@ import requests
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 MAX_TURNS = int(os.getenv("MAX_TURNS", "6"))
+
+EMAIL_FROM = os.getenv("EMAIL_FROM")
+SMTP_USER = os.getenv("SMTP_USER")
+SMTP_PASS = os.getenv("SMTP_PASS")
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.office365.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+EMAIL_TO = os.getenv("EMAIL_TO", "andrew@grhusaproperties.net")
+
 N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL")
 ELEVENLABS_GREETING_FILE = os.getenv("ELEVENLABS_GREETING_FILE")
 
@@ -33,16 +43,20 @@ def safe_detect_language(text, default="en"):
         return default
 
 def system_prompt(lang):
+    if lang == "es":
+        return (
+            "Eres una recepcionista de IA profesional para una empresa de administración de propiedades. "
+            "Responde SIEMPRE en español, de forma natural y con tono calmado. Haz solo una pregunta a la vez. "
+            "Recolecta: dirección, número de apartamento, problema de mantenimiento, y mejor contacto. "
+            "Si mencionan renta, diles al final que usen el portal de Buildium. No cuelgues hasta que digan 'adiós'."
+        )
     return (
-        "Eres una recepcionista de IA profesional para una empresa de administración de propiedades. "
-        "Responde SIEMPRE en español, de forma natural y con tono calmado. Haz solo una pregunta a la vez. "
-        "Recolecta: dirección, número de apartamento, problema de mantenimiento, y mejor contacto. "
-        "Si mencionan renta, diles al final que usen el portal de Buildium. No cuelgues hasta que digan 'adiós'."
-    ) if lang == "es" else (
-        "You are a friendly AI receptionist for a property management company. "
+        "You are a friendly AI receptionist for a Real estate property management company. "
         "Respond ONLY in English with a natural, calm tone. Ask one question at a time. "
         "Collect: property address, unit number, maintenance issue, and best callback method. "
         "If rent is mentioned, tell them at the end to use the Buildium portal. "
+        "If a caller needs to sign a lease, respond like a leasing agent, and ask to schedule an appointment & discuss like a leasing agent or property manager. " 
+        "You respond like a concerned property manager for a real estate comapny, and have jokes, and good humour. "
         "Do not hang up unless they say 'bye'."
     )
 
@@ -57,8 +71,22 @@ def generate_response(user_input, lang, history):
         )
         return response.choices[0].message.content.strip()
     except Exception:
-        log.exception("OpenAI error")
+        log.exception("OpenAI failed")
         return "Lo siento, ¿puedes repetir?" if lang == "es" else "Sorry, can you say that again?"
+
+def send_email(subject, body):
+    try:
+        recipients = [x.strip() for x in EMAIL_TO.split(",") if x.strip()]
+        msg = MIMEText(body)
+        msg["Subject"] = subject
+        msg["From"] = EMAIL_FROM
+        msg["To"] = ", ".join(recipients)
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
+            s.starttls()
+            s.login(SMTP_USER, SMTP_PASS)
+            s.sendmail(EMAIL_FROM, recipients, msg.as_string())
+    except Exception:
+        log.exception("EMAIL FAILED via SMTP")
 
 def post_to_n8n(payload):
     if not N8N_WEBHOOK_URL:
@@ -77,7 +105,7 @@ def twilio_voice_for(lang):
 def twilio_language_code(lang):
     return "es-ES" if lang == "es" else "en-US"
 
-def final_post_to_n8n(call_sid):
+def final_email_and_n8n(call_sid):
     data = memory.get(call_sid, {})
     if not data:
         return
@@ -85,21 +113,25 @@ def final_post_to_n8n(call_sid):
     history = data.get("history", [])
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    # Build full text history
     lines = []
     for msg in history:
-        who = "Caller" if msg["role"] == "user" else "AI"
+        who = "TENANT" if msg["role"] == "user" else "AI"
         lines.append(f"{who}: {msg['content']}")
 
-    payload = {
+    body = (
+        f"📞 AI Tenant Call Summary\n"
+        f"Time: {now}\n"
+        f"Language: {lang.upper()}\n\n" +
+        "\n".join(lines)
+    )
+
+    send_email("📬 AI Receptionist – Final Call Summary", body)
+    post_to_n8n({
         "callSid": call_sid,
         "timestamp": now,
         "lang": lang,
-        "history": history,
-        "conversation": "\n".join(lines)
-    }
-
-    post_to_n8n(payload)
+        "history": history
+    })
 
 # ------------------------------------------------------------------------------
 # Routes
@@ -152,18 +184,16 @@ def voice():
         resp.append(gather)
         return Response(str(resp), mimetype="application/xml")
 
-    # If user says goodbye, end conversation
     if any(x in speech.lower() for x in ["bye", "goodbye", "thanks", "adios", "gracias"]):
         data["history"].append({"role": "user", "content": speech})
         reply = "Gracias por llamar. ¡Hasta luego!" if lang == "es" else "Thanks for calling. Goodbye!"
         data["history"].append({"role": "assistant", "content": reply})
         data["done"] = True
-        final_post_to_n8n(call_sid)
+        final_email_and_n8n(call_sid)
         resp.say(reply, voice=voice_name, language=lang_code)
         resp.hangup()
         return Response(str(resp), mimetype="application/xml")
 
-    # Continue conversation
     data["history"].append({"role": "user", "content": speech})
     reply = generate_response(speech, lang, data["history"])
     data["history"].append({"role": "assistant", "content": reply})
@@ -186,7 +216,7 @@ def status():
     call_status = request.values.get("CallStatus")
     log.info(f"Status callback {call_sid=} {call_status=}")
     if call_status == "completed" and call_sid in memory and not memory[call_sid].get("done"):
-        final_post_to_n8n(call_sid)
+        final_email_and_n8n(call_sid)
         memory[call_sid]["done"] = True
     return ("", 204)
 
