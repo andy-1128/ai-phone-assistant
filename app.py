@@ -43,20 +43,16 @@ def safe_detect_language(text, default="en"):
         return default
 
 def system_prompt(lang):
-    if lang == "es":
-        return (
-            "Eres una recepcionista de IA profesional para una empresa de administración de propiedades. "
-            "Responde SIEMPRE en español, de forma natural y con tono calmado. Haz solo una pregunta a la vez. "
-            "Recolecta: dirección, número de apartamento, problema de mantenimiento, y mejor contacto. "
-            "Si mencionan renta, diles al final que usen el portal de Buildium. No cuelgues hasta que digan 'adiós'."
-        )
     return (
-        "You are a friendly AI receptionist for a Real estate property management company. "
+        "Eres una recepcionista de IA profesional para una empresa de administración de propiedades. "
+        "Responde SIEMPRE en español, de forma natural y con tono calmado. Haz solo una pregunta a la vez. "
+        "Recolecta: dirección, número de apartamento, problema de mantenimiento, y mejor contacto. "
+        "Si mencionan renta, diles al final que usen el portal de Buildium. No cuelgues hasta que digan 'adiós'."
+        if lang == "es" else
+        "You are a friendly AI receptionist for a property management company. "
         "Respond ONLY in English with a natural, calm tone. Ask one question at a time. "
         "Collect: property address, unit number, maintenance issue, and best callback method. "
         "If rent is mentioned, tell them at the end to use the Buildium portal. "
-        "If a caller needs to sign a lease, respond like a leasing agent, and ask to schedule an appointment & discuss like a leasing agent or property manager. " 
-        "You respond like a concerned property manager for a real estate comapny, and have jokes, and good humour. "
         "Do not hang up unless they say 'bye'."
     )
 
@@ -71,7 +67,7 @@ def generate_response(user_input, lang, history):
         )
         return response.choices[0].message.content.strip()
     except Exception:
-        log.exception("OpenAI failed")
+        log.exception("OpenAI error")
         return "Lo siento, ¿puedes repetir?" if lang == "es" else "Sorry, can you say that again?"
 
 def send_email(subject, body):
@@ -85,16 +81,18 @@ def send_email(subject, body):
             s.starttls()
             s.login(SMTP_USER, SMTP_PASS)
             s.sendmail(EMAIL_FROM, recipients, msg.as_string())
-    except Exception:
-        log.exception("EMAIL FAILED via SMTP")
+        log.info("✅ Email sent successfully.")
+    except Exception as e:
+        log.exception("❌ Email sending failed.")
 
 def post_to_n8n(payload):
     if not N8N_WEBHOOK_URL:
         return
     try:
         requests.post(N8N_WEBHOOK_URL, json=payload, timeout=5)
+        log.info("✅ Data sent to n8n.")
     except Exception:
-        log.exception("POST to n8n failed")
+        log.exception("❌ Failed to POST to n8n")
 
 def greeting_for(lang):
     return "Hola, soy la asistente de GRHUSA Properties. ¿En qué puedo ayudarte hoy?" if lang == "es" else "Hello, this is the AI assistant for GRHUSA Properties. How can I help you today?"
@@ -115,8 +113,8 @@ def final_email_and_n8n(call_sid):
 
     lines = []
     for msg in history:
-        who = "TENANT" if msg["role"] == "user" else "AI"
-        lines.append(f"{who}: {msg['content']}")
+        role = "TENANT" if msg["role"] == "user" else "AI"
+        lines.append(f"{role}: {msg['content']}")
 
     body = (
         f"📞 AI Tenant Call Summary\n"
